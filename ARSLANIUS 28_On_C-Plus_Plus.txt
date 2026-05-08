@@ -1055,9 +1055,9 @@ void cmdLoop() {
         if (safeMode == 0 && rec == 0 && diagnostic == 0) {
             if (fileExists(sysServices + "\\TrustedInstaller.active")) {
                 string ins_err = "0";
-                if (!fileExists(kernelPath)) string ins_err = "1";
-                if (!fileExists(regPath)) string ins_err = "1";
-                if (!fileExists(configRoot + "\\BCD")) string ins_err = "1";
+                if (!fileExists(kernelPath)) ins_err = "1";
+                if (!fileExists(regPath)) ins_err = "1";
+                if (!fileExists(configRoot + "\\BCD")) ins_err = "1";
 
                 if (ins_err == "1") {
                     if (!fileExists(kernelPath)) {
