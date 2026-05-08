@@ -23,7 +23,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.2";
+const string CURRENT_BUILD = "58.3";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -69,6 +69,9 @@ int waitMode = 0;
 int logoutRequest = 0;
 int acpiRequest = 0;
 int enableLua = 1;
+int REG_VERSION_FOUND = 0;
+int system_hash_found = 0;
+int admin_hash_found = 0;
 string recoveryRequest = "0";
 
 string systemColor = "0e";
@@ -254,16 +257,40 @@ void loadBCD() {
     string line;
     while (getline(bcd, line)) {
         size_t sep = line.find('=');
-        if (sep == string::npos) continue; 
+        if (sep == string::npos) continue;
         string key = line.substr(0, sep);
         string value = line.substr(sep + 1);
 
-        if (value.empty()) continue; 
+        if (value.empty()) continue;
 
         try {
             if (key == "BOOT_TIMEOUT") bootTimeout = stoi(value);
             else if (key == "DEFAULT_MODE") defaultMode = stoi(value);
             else if (key == "LAST_SUCCESSFUL_MODE") lastSuccessfulMode = stoi(value);
+        }
+        catch (...) {
+            continue;
+        }
+    }
+}
+
+void loadRegistry() {
+    if (!fileExists(regPath)) return;
+
+    ifstream reg(regPath);
+    string line;
+    while (getline(reg, line)) {
+        size_t sep = line.find('=');
+        if (sep == string::npos) continue;
+        string key = line.substr(0, sep);
+        string value = line.substr(sep + 1);
+
+        if (value.empty()) continue;
+
+        try {
+            if (key == "OS_NAME") osName = stoi(value);
+            else if (key == "ENABLE_LUA") enableLua = stoi(value);
+            else if (key == "REG_VERSION") REG_VERSION_FOUND = stoi(value);
         }
         catch (...) {
             continue;
@@ -386,6 +413,41 @@ void bsod(const string& code) {
         system("pause");
         recoveryEnv();
     }
+    else if (code == "2") {
+        setColor("17");
+        cout << "*** STOP: 0x00000002 [0xc00000002, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+        cout << endl;
+        cout << "SYSTEM_ACCOUNT_HASH_MISMATCH - Someone's been playing with kernel.dll in Notepad, huh?" << endl;
+        cout << "Please reinstall or run Startup Repair." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "***Expected system hash: " << EXPECTED_SYSTEM_HASH << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        system("pause");
+        recoveryEnv();
+    }
+    else if (code == "3") {
+        setColor("17");
+        cout << "*** STOP: 0x00000003 [0xc00000003, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
+        cout << endl;
+        cout << "REGISTRY_VERSION_MISMATCH - The version specified in the REG.cfg file is incorrect." << endl;
+        cout << "Please update it to continue working." << endl;
+        cout << endl;
+        cout << "Expected version: " << REG_VERSION << endl;
+        cout << "Found version: " << REG_VERSION_FOUND <<endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        system("pause");
+        recoveryEnv();
+    }
     else if (code == "4") {
         setColor("17");
         cout << "*** STOP: 0x00000004 [0xc00000004, 0x00000000, 0x00000000, 0x00000000]" << endl;
@@ -394,6 +456,24 @@ void bsod(const string& code) {
         cout << endl;
         cout << "REGISTRY_NOT_FOUND - The REG.cfg is missing." << endl;
         cout << "Please reinstall or run Startup Repair." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        system("pause");
+        recoveryEnv();
+    }
+    else if (code == "6") {
+        setColor("17");
+        cout << "*** STOP: 0x00000006 [0xc00000006, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+        cout << endl;
+        cout << "ADMIN_ACCOUNT_HASH_MISMATCH - Someone tried to give themselves admin privileges the hard way." << endl;
+        cout << "The ADMINISTRATOR hash doesn't match. Spoiler: it didn't work." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "***Expected admin hash: " << EXPECTED_ADMIN_HASH <<endl;
         cout << endl;
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
@@ -436,6 +516,11 @@ void bsod(const string& code) {
 
 void bootMenu() {
     loadBCD();
+    loadRegistry(); {
+        if (REG_VERSION_FOUND != std::stoi(REG_VERSION)) {
+            bsod("3");
+        }
+    }
 
     if (recoveryRequest != "1") {
         system("cls");
@@ -792,6 +877,8 @@ void logonScreen() {
     currentUser = "SYSTEM";
     userHome = sysProf;
     logonSuccessOk = 0;
+    acpiRequest = 0;
+    logoutRequest = 0;
 
     system("cls");
     setColor("5b");
@@ -1179,7 +1266,7 @@ void cmdLoop() {
     if (ex_c == "help" || ex_c == "?") {
         cout << "Apps: Notepad, Calc, taskmgr, edit, install, regedit, ArsStore, sysinfo" << endl;
         cout << "System: Help, Lock, lockmenu, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, mv, autorun" << endl;
-        cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, set, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, loader_error, bcdboot, bcdedit" << endl;
+        cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
     }
     else if (ex_c == "cls") interfaceScreen();
     else if (ex_c == "ver") cout << osName << " [Build " << currentBuild << "]" << endl;
@@ -1214,6 +1301,19 @@ void cmdLoop() {
         else {
             cout << "[ ERROR ] File not found." << endl;
         }
+    }
+    else if (ex_c == "autorun") {
+        string autorunCmd;
+        cout << "Command to autorun: ";
+        getline(cin, autorunCmd);
+        autorunCmd = trim(autorunCmd);
+        if (autorunCmd.empty()) {
+            cout << "[ ERROR ] Command cannot be empty." << endl;
+            return;
+        }
+        writeFile(userHome + "\\autorun.txt", autorunCmd);
+        writeLog("AUTORUN_SET: " + autorunCmd + " BY " + currentUser);
+        cout << "[ OK ] Autorun set: " << autorunCmd << endl;
     }
     else if (ex_c == "mkdir") {
         string folderName;
@@ -1305,6 +1405,22 @@ void cmdLoop() {
         cout << "Enter text: ";
         getline(cin, text);
         cout << text << endl;
+    }
+    else if (ex_c == "reset") {
+        cout << "WARNING: This will delete ALL users and reset system to defaults. " << endl;
+        cout << "Type YES to continue: ";
+        string confirm;
+        getline(cin, confirm);
+        confirm = trim(confirm);
+        if (confirm == "YES") {
+            startupRepair();
+            cout << "[ OK ] System reset completed. Rebooting..." << endl;
+            system("pause");
+            rebootScreen();
+        }
+        else {
+            cout << "Canceled." << endl;
+        }
     }
     else if (ex_c == "shutdown") {
         logoutRequest = 1;
@@ -1630,7 +1746,9 @@ int main() {
     initPaths();
     ensureDirectories();
 
-
+    if (!dirExists(configRoot)) {
+        bsod("1a");
+    };
     if (!fileExists(kernelPath)) {
         bsod("1");
     };
@@ -1640,9 +1758,9 @@ int main() {
     if (!fileExists(configRoot + "\\BCD")) {
         bsod("14");
     };
-    if (!dirExists(configRoot)) {
-        bsod("1a");
-    };
+    string kernel_hash_check = readFile(kernelPath);
+    if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) bsod("2");
+    if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("2");
 
     bootMenu();
 
