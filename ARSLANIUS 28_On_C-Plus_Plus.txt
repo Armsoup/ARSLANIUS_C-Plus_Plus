@@ -288,7 +288,7 @@ void loadRegistry() {
         if (value.empty()) continue;
 
         try {
-            if (key == "OS_NAME") osName = stoi(value);
+            if (key == "OS_NAME") osName = value;
             else if (key == "ENABLE_LUA") enableLua = stoi(value);
             else if (key == "REG_VERSION") REG_VERSION_FOUND = stoi(value);
         }
@@ -1760,7 +1760,7 @@ int main() {
     };
     string kernel_hash_check = readFile(kernelPath);
     if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) bsod("2");
-    if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("2");
+    if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("6");
 
     bootMenu();
 
