@@ -23,7 +23,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.1";
+const string CURRENT_BUILD = "58.2";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -283,6 +283,65 @@ void saveBCD() {
     writeFile(bcdPath, ss.str());
 }
 
+void Manual() {
+    system("cls");
+    cout << "======================================================================================================================" << endl;
+    cout << "                                         ARSLANIUS 28 - USER MANUAL" << endl;
+    cout << "======================================================================================================================" << endl;
+    cout << "" << endl;
+    cout << "[ QUICK START ]" << endl;
+    cout << "1. First run? Press R at BSoD then press 1 [Startup Repair]" << endl;
+    cout << "2. Login as SYSTEM ADMINISTRATOR [password: Jiupolaqmn_isArslanius-lo]" << endl;
+    cout << "3. Type 'adduser', then enter your name and your password" << endl;
+    cout << "4. Type 'lock', then login as your user" << endl;
+    cout << "" << endl;
+    cout << "[ ARSLANIUS BOOT MANAGER ]" << endl;
+    cout << "  - Press 1-7 to select mode" << endl;
+    cout << "  - Auto-boot in %boot_timeout% seconds" << endl;
+    cout << "" << endl;
+    cout << "[ COMMANDS ]" << endl;
+    cout << "System: help, lock, cls, ver, whoami, reboot, shutdown, lockmenu [ctrl alt del]" << endl;
+    cout << "Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
+    cout << "Admin: adduser, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
+    cout << "Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
+    cout << "Recovery: backup, backup-restore, restore-point, restore, sfc, events" << endl;
+    cout << "Fun: bsod, Notepad, wait_mode, echo" << endl;
+    cout << "" << endl;
+    cout << "[ RECOVERY ENVIRONMENT ]" << endl;
+    cout << "1 [Startup Repair] - recreates all files" << endl;
+    cout << "4 [Mini cmd] - command line with recovery tools" << endl;
+    cout << "2 or 3 - restore from restore points or backup" << endl;
+    cout << "======================================================================================================================" << endl;
+    system ("pause");
+    bootMenu();
+}
+
+void Update() {
+    cout << "If you have files from an older version, place them in the root folder along with the .cmd file and press Y." << endl;
+    cout << "Y/N: ";
+    char c = _getch();
+    cout << c << endl;
+
+    if (toupper(c) == 'Y') {
+        if (!fileExists(kernelPath)) {
+            cout << "[ ERROR ] kernel.dll not found.";
+            bsod("1");
+        }
+        saveBCD();
+
+        stringstream reg_update;
+        reg_update << "OS_NAME = ARSLANIUS 28" << endl;
+        reg_update << "SYSTEM_COLOR=0e" << endl;
+        reg_update << "ADMIN_COLOR=4f" << endl;
+        reg_update << "USER_COLOR=1f" << endl;
+        reg_update << "ENABLE_LUA=1" << endl;
+        reg_update << "REG_VERSION=" << REG_VERSION << endl;
+        writeFile(regPath, reg_update.str());
+        bootMenu();
+    }
+    bootMenu();
+}
+
 void ensureDirectories() {
     if (!dirExists(configRoot)) CreateDirectoryA(configRoot.c_str(), NULL);
     if (!dirExists(sysServices)) CreateDirectoryA(sysServices.c_str(), NULL);
@@ -394,6 +453,7 @@ void bootMenu() {
         cout << "  5. Diagnostic Mode NETWORK" << endl;
         cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
         cout << "  Auto-boot in " << bootTimeout << " seconds..." << endl;
+        cout << "  Press 6 for Manual" << endl;
         cout << "  Press 7 for update from old version" << endl;
         cout << "======================================================================================================================" << endl;
 
@@ -424,12 +484,8 @@ void bootMenu() {
         else if (choice == '3') bootChoice = 3;
         else if (choice == '4') bootChoice = 4;
         else if (choice == '5') bootChoice = 5;
-        else if (choice == '7') {
-            // Update mode - simplified
-            startupRepair();
-            bootMenu();
-            return;
-        }
+        else if (choice == '6') Manual();
+        else if (choice == '7') Update();
         else bootChoice = defaultMode;
     }
 
@@ -995,7 +1051,59 @@ void cmdLoop() {
             system("pause");
             waitMode = 0;
         }
+        // services
+        if (safeMode == 0 && rec == 0 && diagnostic == 0) {
+            if (fileExists(sysServices + "\\TrustedInstaller.active")) {
+                string ins_err = "0";
+                if (!fileExists(kernelPath)) string ins_err = "1";
+                if (!fileExists(regPath)) string ins_err = "1";
+                if (!fileExists(configRoot + "\\BCD")) string ins_err = "1";
 
+                if (ins_err == "1") {
+                    if (!fileExists(kernelPath)) {
+                        stringstream kernel_ins;
+                        kernel_ins << "SYSTEM = 350703396" << endl;
+                        kernel_ins << "SYSTEM ADMINISTRATOR = 734380451" << endl;
+                        writeFile(kernelPath, kernel_ins.str());
+                    }
+                    if (!fileExists(configRoot + "\\BCD")) {
+                        saveBCD();
+                    }
+                    if (!fileExists(regPath)) {
+                        stringstream reg_ins;
+                        reg_ins << "OS_NAME = ARSLANIUS 28" << endl;
+                        reg_ins << "SYSTEM_COLOR=0e" << endl;
+                        reg_ins << "ADMIN_COLOR=4f" << endl;
+                        reg_ins << "USER_COLOR=1f" << endl;
+                        reg_ins << "ENABLE_LUA=1" << endl;
+                        reg_ins << "REG_VERSION=" << REG_VERSION << endl;
+
+                    }
+                }
+            }
+            if (fileExists(sysServices + "\\SysPulse.active")) {
+                int PulseCheck = rand() % 10;
+                if (PulseCheck == 5) {
+                    writeLog("BarOS SERVICE\\SYSPULSE: System Health OK");
+                }
+                if (fileExists(sysServices + "\\NetMonitor.active")) {
+                    int NetCheck = rand() % 10;
+                    if (NetCheck == 5) {
+                        string host = "github.com";
+                        string NetCheckS = "ping -n 1 " + host + " >nul 2>&1";
+                        int NetCheckResult = system(NetCheckS.c_str());
+                        if (NetCheckResult != 0) {
+                            cout << "BarOS SERVICE\\NETMONITOR: OFFLINE" << endl;
+                            writeLog("BarOS SERVICE\\NETMONITOR: OFFLINE");
+                        }
+                        else {
+                            cout << "BarOS SERVICE\\NETMONITOR: ONLINE" << endl;
+                            writeLog("BarOS SERVICE\\NETMONITOR: ONLINE");
+                        }
+                    }
+                }
+            }
+        }
         // Prompt
         cout << currentUser << "@ARSLANIUS> ";
         string cmd;
@@ -1008,7 +1116,7 @@ void cmdLoop() {
     }
 }
 
-void core(const string& cmd) {
+    void core(const string & cmd) {
     vector<string> parts = split(cmd, ' ');
     if (parts.empty()) return;
 
