@@ -16,6 +16,7 @@
 #include <conio.h>
 #include <direct.h>
 #include <io.h>
+#include "resource.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -24,7 +25,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.4";
+const string CURRENT_BUILD = "58.5";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -71,6 +72,7 @@ int logoutRequest = 0;
 int acpiRequest = 0;
 int enableLua = 1;
 int REG_VERSION_FOUND = 0;
+int setup = 0;
 int system_hash_found = 0;
 int admin_hash_found = 0;
 int sudo_command = 0;
@@ -100,6 +102,11 @@ void memoryDiag();
 void logonScreen();
 void applyColor();
 void cmdLoop();
+void check_AUTHORITY();
+void check_kernel();
+void check_registry();
+void check_BCD();
+void installapp(const string& app_id);
 void core(const string& cmd);
 bool checkHash(const string& input, const string& expectedHash);
 string calculateHash(const string& input);
@@ -117,6 +124,7 @@ string readFile(const string& path);
 void writeFile(const string& path, const string& content);
 void appendFile(const string& path, const string& content);
 void setColor(const string& colorCode);
+void oobe();
 
 // =====================================================================
 // IMPLEMENTATION: UTILITY FUNCTIONS
@@ -183,7 +191,7 @@ string getCurrentDateTime() {
 void writeLog(const string& message) {
     ofstream log(logPath, ios::app);
     if (log.is_open()) {
-        log << "[" << getCurrentDateTime() << " " << message << "]" << endl;
+        log << "[" << getCurrentDateTime() << "]" << " " << message << endl;
     }
 }
 
@@ -298,6 +306,116 @@ void loadBCD() {
     }
 }
 
+void installapp(const string& app_id) {
+    if (app_id == "1") {
+        string appPath = programsRoot + "\\Scanner.bat";
+        stringstream app_install;
+        app_install << "@echo off" << endl;
+        app_install << "echo Scanning %cd%..." << endl;
+        app_install << "dir /s /b \"%cd%\" > \"%cd%\\scan_%date%.txt\"" << endl;
+        app_install << "echo Scan complete. Saved to scan_%date%.txt" << endl;
+        app_install << "pause" << endl;
+        app_install << "exit /b" << endl;
+        writeFile(appPath, app_install.str());
+    }
+    if (app_id == "2") {
+        string appPath = programsRoot + "\\Notes.bat";
+        stringstream app_install;
+        app_install << "@echo off" << endl;
+        app_install << "set /p txt=Enter text: " << endl;
+        app_install << "echo %txt% >> \"%cd%\\notes.txt\"" << endl;
+        app_install << "echo Note saved." << endl;
+        app_install << "pause" << endl;
+        app_install << "exit /b" << endl;
+        writeFile(appPath, app_install.str());
+    }
+    if (app_id == "3") {
+        string appPath = programsRoot + "\\Calc.bat";
+        stringstream app_install;
+        app_install << "@echo off" << endl;
+        app_install << "title Calculator" << endl;
+        app_install << "color 2f" << endl;
+        app_install << ":start" << endl;
+        app_install << "set /p sum=Please enter the question:" << endl;
+        app_install << "set /a ans=%sum%" << endl;
+        app_install << "echo The Answer=%ans%" << endl;
+        app_install << "pause" << endl;
+        app_install << "cls" << endl;
+        app_install << "goto start" << endl;
+        writeFile(appPath, app_install.str());
+    }
+}
+
+void check_kernel () {
+    vector<string> linesToFind = {
+        "SYSTEM =",
+        "SYSTEM ADMINISTRATOR ="
+    };
+    string content = readFile(kernelPath);
+    string lowerContent = content;
+    transform(lowerContent.begin(), lowerContent.end(), lowerContent.begin(), ::tolower);
+    for (const string& searchFor : linesToFind) {
+        string lowerSearch = searchFor;
+        transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), ::tolower);
+        if (lowerContent.find(lowerSearch) != string::npos) {
+        }
+        else {
+            bsod("8");
+        }
+    }
+}
+
+void check_registry() {
+    vector<string> linesToFind = {
+        "OS_NAME =",
+        "SYSTEM_COLOR=",
+        "ADMIN_COLOR=",
+        "USER_COLOR=",
+        "ENABLE_LUA=",
+        "SETUP=",
+        "REG_VERSION="
+    };
+    string content = readFile(regPath);
+    string lowerContent = content;
+    transform(lowerContent.begin(), lowerContent.end(), lowerContent.begin(), ::tolower);
+    for (const string& searchFor : linesToFind) {
+        string lowerSearch = searchFor;
+        transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), ::tolower);
+        if (lowerContent.find(lowerSearch) != string::npos) {
+        } else {
+            bsod("7");
+        }
+    }
+}
+void check_BCD() {
+    vector<string> linesToFind = {
+        "BOOT_TIMEOUT=",
+        "DEFAULT_MODE=",
+    };
+    string content = readFile(configRoot + "\\BCD");
+    string lowerContent = content;
+    transform(lowerContent.begin(), lowerContent.end(), lowerContent.begin(), ::tolower);
+    for (const string& searchFor : linesToFind) {
+        string lowerSearch = searchFor;
+        transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), ::tolower);
+        if (lowerContent.find(lowerSearch) != string::npos) {
+        }
+        else {
+            bsod("13");
+        }
+    }
+}
+
+void check_AUTHORITY() {
+    string kernel = readFile(kernelPath);
+    string lowerKernel = kernel;
+    transform(lowerKernel.begin(), lowerKernel.end(), lowerKernel.begin(), ::tolower);
+
+    if (lowerKernel.find("baros authority") != string::npos) {
+        bsod("5");
+    }
+}
+
 void loadRegistry() {
     if (!fileExists(regPath)) return;
 
@@ -315,6 +433,7 @@ void loadRegistry() {
             if (key == "OS_NAME") osName = value;
             else if (key == "ENABLE_LUA") enableLua = stoi(value);
             else if (key == "REG_VERSION") REG_VERSION_FOUND = stoi(value);
+            else if (key == "SETUP") setup = stoi(value);
         }
         catch (...) {
             continue;
@@ -387,6 +506,7 @@ void Update() {
         reg_update << "ADMIN_COLOR=4f" << endl;
         reg_update << "USER_COLOR=1f" << endl;
         reg_update << "ENABLE_LUA=1" << endl;
+        reg_update << "SETUP=0" << endl; 
         reg_update << "REG_VERSION=" << REG_VERSION << endl;
         writeFile(regPath, reg_update.str());
         bootMenu();
@@ -490,6 +610,26 @@ void bsod(const string& code) {
         pause();
         recoveryEnv();
     }
+    else if (code == "5") {
+        setColor("04");
+        cout << "*** STOP: 0x00000005 [0xc00000005, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+        cout << endl;
+        cout << "RESERVED_USERNAME_DETECTED - Security violation!" << endl;
+        cout << "Someone tried to create 'BarOS AUTHORITY' in kernel.dll." << endl;
+        cout << "That's like printing your own \"100% REAL OFFICIAL\" dollar bill." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Reserved username found in kernel space." << endl;
+        cout << "*** System halted to prevent unauthorized access." << endl;
+        cout << endl;
+        cout << "If you call a support specialist, tell him this information so that he can laugh." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
+    }
     else if (code == "6") {
         setColor("17");
         cout << "*** STOP: 0x00000006 [0xc00000006, 0x00000000, 0x00000000, 0x00000000]" << endl;
@@ -507,6 +647,46 @@ void bsod(const string& code) {
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
         pause();
         recoveryEnv();
+    }
+    else if (code == "7") {
+        setColor("17");
+        cout << "*** STOP: 0x00000007 [0xc00000007, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
+        cout << endl;
+        cout << "BAD_SYSTEM_CONFIG_INFO - The registry is missing required entries." << endl;
+        cout << "OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR, ENABLE_LUA, or REG_VERSION" << endl;
+        cout << "is missing. Run Startup Repair to restore the registry." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Registry file found but incomplete." << endl;
+        cout << "*** Expected entries: OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR," << endl;
+        cout << "*** ENABLE_LUA, REG_VERSION" << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
+    }
+    else if (code == "8") {
+    setColor("17");
+    cout << "*** STOP: 0x00000008 [0xc00000008, 0x00000000, 0x00000000, 0x00000000]" << endl;
+    cout << endl;
+    cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+    cout << endl;
+    cout << "KERNEL_INCOMPLETE - The kernel is missing required SYSTEM or ADMINISTRATOR entries." << endl;
+    cout << "Someone deleted important lines from kernel.dll. Probably with Notepad." << endl;
+    cout << endl;
+    cout << "Technical information:" << endl;
+    cout << "*** Missing: SYSTEM or SYSTEM ADMINISTRATOR account" << endl;
+    cout << "*** Kernel file found but incomplete." << endl;
+    cout << endl;
+    cout << "If this is the first time you've seen this error, restart the system." << endl;
+    cout << endl;
+    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+    pause();
+    recoveryEnv();
     }
     else if (code == "9") {
         setColor("17");
@@ -588,6 +768,26 @@ void bsod(const string& code) {
         pause();
         recoveryEnv();
     }
+    else if (code == "13") {
+    setColor("17");
+    cout << "*** STOP: 0x00000013 [0xc00000013, 0x00000000, 0x00000000, 0x00000000]" << endl;
+    cout << endl;
+    cout << "*** File: \\Settings And System Files\\BCD" << endl;
+    cout << endl;
+    cout << "BCD_CORRUPTED - The BCD is missing required entries." << endl;
+    cout << "DEFAULT_MODE or BOOT_TIMEOUT is missing." << endl;
+    cout << "Run Startup Repair to restore the BCD." << endl;
+    cout << endl;
+    cout << "Technical information:" << endl;
+    cout << "*** BCD file found but incomplete." << endl;
+    cout << "*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE" << endl;
+    cout << endl;
+    cout << "If this is the first time you've seen this error, restart the system." << endl;
+    cout << endl;
+    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+    pause();
+    recoveryEnv();
+    }
     else if (code == "14") {
         setColor("17");
         cout << "*** STOP: 0x00000014 [0xc00000014, 0x00000000, 0x00000000, 0x00000000]" << endl;
@@ -607,13 +807,32 @@ void bsod(const string& code) {
         setColor("17");
         cout << "*** STOP: 0xDEADBEEF [0x00000666, 0x00000000, 0x00000000, 0x00000000]" << endl;
         cout << endl;
-        cout << "MANUAL_CRASH - You typed 'bsod' and now you're here." << endl;
+        cout << "MANUAL_CRASH - You typed 'bsod' and now you're here. Surprised? You shouldn't be." << endl;
+        cout << "This error was intentionally triggered by the 'bsod' command." << endl;
+        cout << "No real damage was done. Just reboot and continue." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Crash initiated by user: " << currentUser << endl;
+        cout << "*** Stop code: 0xTeam_by_" << currentUser << endl;
+        cout << "*** Next time try 'help' instead. Or don't. I'm not your mom." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
         pause();
         bootMenu();
     }
     else {
         setColor("17");
-        cout << "*** STOP: 0x00001225a [UNKNOWN_ERROR]" << endl;
+        cout << "*** STOP: 0x00001225a [0x00000220, 0x00000002, 0x00000000a, 0x00000000]" << endl;
+        cout << endl;
+        cout << "UNKNOWN_ERROR - Something went wrong and ARSLANIUS crashed," << endl;
+        cout << "perhaps the bsod environment variable was not defined due to a serious problem," << endl;
+        cout << "replace the main ARSLANIUS file with the original one." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** UNKNOWN_ERROR" << endl;
+        cout << "*** Stop code: 0x00001225a" << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
         pause();
         exit(1);
     }
@@ -630,12 +849,16 @@ void bootMenu() {
     if (!fileExists(kernelPath)) {
         bsod("1");
     };
+    check_AUTHORITY();
+    check_kernel();
     if (!fileExists(regPath)) {
         bsod("4");
     };
     if (!fileExists(configRoot + "\\BCD")) {
         bsod("14");
     };
+    check_BCD();
+    check_registry();
     loadBCD();
     loadRegistry(); {
         if (REG_VERSION_FOUND != std::stoi(REG_VERSION)) {
@@ -669,6 +892,73 @@ void bootMenu() {
             bsod("12");
         }
         CloseHandle(hLog);
+    }
+    if (setup == 1) {
+        setColor("1f");
+        cout << "Welcome to OOBE ARSLANIUS 28! Do you want to start?" << endl;
+        cout << "Y/N: ";
+        char choice = _getch();
+        choice = tolower(choice);
+        cout << choice << endl;
+
+        switch (choice) {
+        case 'y': {
+            PlaySound(MAKEINTRESOURCE(IDR_WAVE1), GetModuleHandle(NULL), SND_RESOURCE | SND_ASYNC | SND_LOOP);
+            cout << "Preparing ARSLANIUS..." << endl;
+            Sleep(2000);
+            clearScreen();
+            cout << "Type your Username: ";
+            string nu, np;
+            getline(cin, nu);
+            nu = trim(nu);
+            if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR") {
+                cout << "[ ERROR ] Reserved username." << endl;
+                return;
+            }
+            string user_exists = readFile(kernelPath);
+            if (user_exists.find(nu + " =") != string::npos) {
+                cout << "[ ERROR ] User already exists." << endl;
+                return;
+            }
+            cout << "Password: ";
+            char ch;
+            while ((ch = _getch()) != '\r') {
+                if (ch == '\b') {
+                    if (!np.empty()) np.pop_back();
+                }
+                else {
+                    np += ch;
+                    cout << '*';
+                }
+            }
+            cout << endl;
+
+            string hash = calculateHash(np);
+            appendFile(kernelPath, nu + " = " + hash + "\n");
+            CreateDirectoryA((usersRoot + "\\" + nu).c_str(), NULL);
+            cout << "[ OK ] User created." << endl;
+            pause();
+            stringstream reg;
+            reg << "OS_NAME = ARSLANIUS 28" << endl;
+            reg << "SYSTEM_COLOR=0e" << endl;
+            reg << "ADMIN_COLOR=4f" << endl;
+            reg << "USER_COLOR=1f" << endl;
+            reg << "ENABLE_LUA=1" << endl;
+            reg << "SETUP=0" << endl;
+            reg << "REG_VERSION=" << REG_VERSION << endl;
+            writeFile(regPath, reg.str());
+            clearScreen();
+            cout << "[ OK ] Everything is ready to go." << endl;
+            pause();
+            PlaySound(NULL, NULL, 0);
+            bootMenu(); break;
+        }
+        case 'n': {
+            exit(1);
+        }
+        default: bootMenu();
+        }
+        bootMenu();
     }
 
     if (recoveryRequest != "1") {
@@ -912,6 +1202,7 @@ void startupRepair() {
     reg << "ADMIN_COLOR=4f" << endl;
     reg << "USER_COLOR=1f" << endl;
     reg << "ENABLE_LUA=1" << endl;
+    reg << "SETUP=1" << endl;
     reg << "REG_VERSION=" << REG_VERSION << endl;
     writeFile(regPath, reg.str());
 
@@ -1201,15 +1492,21 @@ void interfaceScreen() {
 
     // Start services
     if (safeMode == 0 && rec == 0 && diagnostic == 0) {
-        cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\SysPulse..." << endl;
-        writeFile(sysServices + "\\SysPulse.active", "RUNNING");
-        Sleep(1000);
-        cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\NetMonitor..." << endl;
-        writeFile(sysServices + "\\NetMonitor.active", "RUNNING");
-        Sleep(1000);
-        cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\TrustedInstaller..." << endl;
-        writeFile(sysServices + "\\TrustedInstaller.active", "RUNNING");
-        Sleep(1000);
+        if (!fileExists(sysServices + "\\SysPulse.active")) {
+            cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\SysPulse..." << endl;
+            writeFile(sysServices + "\\SysPulse.active", "RUNNING");
+            Sleep(1000);
+        }
+        if (!fileExists(sysServices + "\\NetMonitor.active")) {
+            cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\NetMonitor..." << endl;
+            writeFile(sysServices + "\\NetMonitor.active", "RUNNING");
+            Sleep(1000);
+        }
+        if (!fileExists(sysServices + "\\TrustedInstaller.active")) {
+            cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\TrustedInstaller..." << endl;
+            writeFile(sysServices + "\\TrustedInstaller.active", "RUNNING");
+            Sleep(1000);
+        }
     }
 
     if (rec == 1) {
@@ -1298,13 +1595,20 @@ void cmdLoop() {
         }
         // services
         if (safeMode == 0 && rec == 0 && diagnostic == 0) {
+            if (!dirExists(configRoot)) CreateDirectoryA(configRoot.c_str(), NULL);
+            if (!dirExists(sysServices)) CreateDirectoryA(sysServices.c_str(), NULL);
+            if (!fileExists(sysServices + "\\TrustedInstaller.active")) {
+                writeFile(sysServices + "\\TrustedInstaller.active", "RUNNING");
+            }
             if (fileExists(sysServices + "\\TrustedInstaller.active")) {
-                string ins_err = "0";
-                if (!fileExists(kernelPath)) ins_err = "1";
-                if (!fileExists(regPath)) ins_err = "1";
-                if (!fileExists(configRoot + "\\BCD")) ins_err = "1";
+                int ins_err = 0;
+                if (!fileExists(kernelPath)) ins_err = 1;
+                if (!fileExists(regPath)) ins_err = 1;
+                if (!fileExists(configRoot + "\\BCD")) ins_err = 1;
 
-                if (ins_err == "1") {
+                if (ins_err == 1) {
+                    cout << "[BarOS SERVICE\TrustedInstaller] Integrity violation detected!" << endl;
+                    cout << "[BarOS SERVICE\TrustedInstaller] Executing background repair..." << endl;
                     if (!fileExists(kernelPath)) {
                         stringstream kernel_ins;
                         kernel_ins << "SYSTEM = 350703396" << endl;
@@ -1321,9 +1625,11 @@ void cmdLoop() {
                         reg_ins << "ADMIN_COLOR=4f" << endl;
                         reg_ins << "USER_COLOR=1f" << endl;
                         reg_ins << "ENABLE_LUA=1" << endl;
+                        reg_ins << "SETUP=0" << endl;
                         reg_ins << "REG_VERSION=" << REG_VERSION << endl;
                         writeFile(regPath, reg_ins.str());
-
+                        cout << "[BarOS SERVICE\TrustedInstaller] System restored." << endl;
+                        writeLog("BarOS SERVICE\TrustedInstaller: AUTO_REPAIR_SUCCESS");
                     }
                 }
             }
@@ -1331,6 +1637,16 @@ void cmdLoop() {
                 int PulseCheck = rand() % 10;
                 if (PulseCheck == 5) {
                     writeLog("BarOS SERVICE\\SYSPULSE: System Health OK");
+                }
+                const size_t MAX_LOG_SIZE = 10240;
+                HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hLog != INVALID_HANDLE_VALUE) {
+                    if (GetFileSize(hLog, NULL) > MAX_LOG_SIZE) {
+                        CloseHandle(hLog);
+                        DeleteFileA(logPath.c_str());
+                        writeLog("BarOS SERVICE\\SYSPULSE: LOG_CLEARED");
+                    }
+                    CloseHandle(hLog);
                 }
             }
             if (fileExists(sysServices + "\\NetMonitor.active")) {
@@ -1534,7 +1850,7 @@ void core(const string& cmd) {
         currentUser != "BarOS SERVICE\\NetMonitor" &&
         sudo_command == 0) {
         bool allowed = false;
-        vector<string> userCmds = { "help", "mkdir", "wait_mode", "echo", "lockmenu",
+        vector<string> userCmds = { "help", "arsstore", "mkdir", "wait_mode", "echo", "lockmenu",
                                     "autorun", "ping", "cp", "mv", "touch", "backup",
                                     "ls", "cd", "cat", "ren", "backup-restore", "passwd",
                                     "reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -1561,6 +1877,26 @@ void core(const string& cmd) {
     else if (ex_c == "whoami") {
         cout << "Current User: " << currentUser << endl;
         cout << "Path: " << userHome << endl;
+    }
+    else if (ex_c == "arsstore") {
+        clearScreen();
+        cout << "======================================================================================================================" << endl;
+        cout << "                                                    ARSLANIUS STORE[v2.0]" << endl;
+        cout << "======================================================================================================================" << endl;
+        cout << "Available Apps :" << endl;
+        cout << " [1] System Scanner(Utility)" << endl;
+        cout << " [2] NotePad Lite(Office)" << endl;
+        cout << " [3] Calc(Utility)" << endl;
+        cout << " [4] Exit Store" << endl;
+        cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+        cout << "Select number: ";
+        char choice = _getch();
+        cout << choice << endl;
+        if (choice == '1') installapp("1");
+        else if (choice == '2') installapp("2");
+        else if (choice == '3') installapp("3");
+        else if (choice == '4') interfaceScreen();
+        core("arsstore");
     }
     else if (ex_c == "ls") system("dir /w");
     else if (ex_c == "cd") {
@@ -1765,7 +2101,7 @@ void core(const string& cmd) {
         string user_exists = readFile(kernelPath);
         if (user_exists.find(nu + " =") != string::npos) {
             PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
-            cout << "[ ERROR ] User arleady exists." << endl;
+            cout << "[ ERROR ] User already exists." << endl;
             return;
         }
         cout << "Password: ";
@@ -1968,6 +2304,7 @@ void core(const string& cmd) {
         reg << "ADMIN_COLOR=4f" << endl;
         reg << "USER_COLOR=1f" << endl;
         reg << "ENABLE_LUA=1" << endl;
+        reg << "SETUP=0" << endl;
         reg << "REG_VERSION=" << REG_VERSION << endl;
         writeFile(regPath, reg.str());
         cout << "[ DONE ] Registry updated." << endl;
