@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <chrono>
 #include <thread>
+#include <mmsystem.h>
 #include <algorithm>
 #include <cctype>
 #include <conio.h>
@@ -23,7 +24,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.3";
+const string CURRENT_BUILD = "58.4";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -72,6 +73,7 @@ int enableLua = 1;
 int REG_VERSION_FOUND = 0;
 int system_hash_found = 0;
 int admin_hash_found = 0;
+int sudo_command = 0;
 string recoveryRequest = "0";
 
 string systemColor = "0e";
@@ -207,19 +209,6 @@ void appendFile(const string& path, const string& content) {
     }
 }
 
-void setColor(const string& colorCode) {
-    if (colorCode == "0f") system("color 0f");
-    else if (colorCode == "0e") system("color 0e");
-    else if (colorCode == "4f") system("color 4f");
-    else if (colorCode == "1f") system("color 1f");
-    else if (colorCode == "5b") system("color 5b");
-    else if (colorCode == "07") system("color 07");
-    else if (colorCode == "9f") system("color 9f");
-    else if (colorCode == "17") system("color 17");
-    else if (colorCode == "04") system("color 04");
-    else system("color 07");
-}
-
 string calculateHash(const string& input) {
     long long hashVal = 0;
     const int salt = 79;
@@ -247,6 +236,41 @@ string calculateHash(const string& input) {
 
 bool checkHash(const string& input, const string& expectedHash) {
     return calculateHash(input) == expectedHash;
+}
+
+void pause() {
+    cout << "Press any key to continue...";
+    _getch(); 
+    cout << endl;
+}
+
+void clearScreen() {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    COORD coordScreen = { 0, 0 };
+    DWORD cCharsWritten;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    DWORD dwConSize;
+
+    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
+    dwConSize = csbi.dwSize.X * csbi.dwSize.Y;
+
+    FillConsoleOutputCharacter(hConsole, (TCHAR)' ', dwConSize, coordScreen, &cCharsWritten);
+
+    FillConsoleOutputAttribute(hConsole, csbi.wAttributes, dwConSize, coordScreen, &cCharsWritten);
+
+    SetConsoleCursorPosition(hConsole, coordScreen);
+}
+
+void setColor(const string& colorCode) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    try {
+        int color = stoi(colorCode, nullptr, 16);
+        SetConsoleTextAttribute(hConsole, (WORD)color);
+        clearScreen();
+    }
+    catch (...) {
+        SetConsoleTextAttribute(hConsole, 7);
+    }
 }
 
 void loadBCD() {
@@ -311,7 +335,7 @@ void saveBCD() {
 }
 
 void Manual() {
-    system("cls");
+    clearScreen();
     cout << "======================================================================================================================" << endl;
     cout << "                                         ARSLANIUS 28 - USER MANUAL" << endl;
     cout << "======================================================================================================================" << endl;
@@ -339,7 +363,7 @@ void Manual() {
     cout << "4 [Mini cmd] - command line with recovery tools" << endl;
     cout << "2 or 3 - restore from restore points or backup" << endl;
     cout << "======================================================================================================================" << endl;
-    system ("pause");
+    pause();
     bootMenu();
 }
 
@@ -351,6 +375,7 @@ void Update() {
 
     if (toupper(c) == 'Y') {
         if (!fileExists(kernelPath)) {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] kernel.dll not found.";
             bsod("1");
         }
@@ -381,7 +406,9 @@ void ensureDirectories() {
 // =====================================================================
 
 void bsod(const string& code) {
-    system("cls");
+    clearScreen();
+    std::thread soundThread([]() { Beep(750, 1710); });
+    soundThread.detach();
 
     if (code == "1a") {
         setColor("17");
@@ -395,7 +422,7 @@ void bsod(const string& code) {
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "1") {
@@ -410,7 +437,7 @@ void bsod(const string& code) {
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "2") {
@@ -423,12 +450,12 @@ void bsod(const string& code) {
         cout << "Please reinstall or run Startup Repair." << endl;
         cout << endl;
         cout << "Technical information:" << endl;
-        cout << "***Expected system hash: " << EXPECTED_SYSTEM_HASH << endl;
+        cout << "*** Expected system hash: " << EXPECTED_SYSTEM_HASH << endl;
         cout << endl;
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "3") {
@@ -441,11 +468,11 @@ void bsod(const string& code) {
         cout << "Please update it to continue working." << endl;
         cout << endl;
         cout << "Expected version: " << REG_VERSION << endl;
-        cout << "Found version: " << REG_VERSION_FOUND <<endl;
+        cout << "Found version: " << REG_VERSION_FOUND << endl;
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "4") {
@@ -460,7 +487,7 @@ void bsod(const string& code) {
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "6") {
@@ -473,17 +500,99 @@ void bsod(const string& code) {
         cout << "The ADMINISTRATOR hash doesn't match. Spoiler: it didn't work." << endl;
         cout << endl;
         cout << "Technical information:" << endl;
-        cout << "***Expected admin hash: " << EXPECTED_ADMIN_HASH <<endl;
+        cout << "*** Expected admin hash: " << EXPECTED_ADMIN_HASH << endl;
         cout << endl;
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
+        recoveryEnv();
+    }
+    else if (code == "9") {
+        setColor("17");
+        cout << "*** STOP: 0x00000009 [0xc00000009, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\ARSLANIUS 28.exe" << endl;
+        cout << endl;
+        cout << "LOGON_ATTACK_DETECTED - Too many failed login attempts." << endl;
+        cout << "A brute force attack may be in progress." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Failed attempts: 10" << endl;
+        cout << "*** System halted to prevent unauthorized access." << endl;
+        cout << "*** Run Recovery Environment to investigate." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
+    }
+    else if (code == "10") {
+    setColor("17");
+    cout << "*** STOP: 0x00000010 [0xc00000010, 0x00000000, 0x00000000, 0x00000000]" << endl;
+    cout << endl;
+    cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+    cout << endl;
+    cout << "The kernel is full, run startup repair to reset it." << endl;
+    cout << "Looks like someone needed TOO many accounts." << endl;
+    cout << "Run Startup Repair to restore kernel." << endl;
+    cout << endl;
+    cout << "Technical information:" << endl;
+    cout << "*** Size: >12 KB" << endl;
+    cout << "*** Kernel file found but locked." << endl;
+    cout << endl;
+    cout << "If this is the first time you've seen this error, restart the system." << endl;
+    cout << endl;
+    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+    pause();
+    recoveryEnv();
+    }
+    else if (code == "11") {
+    setColor("17");
+    cout << "*** STOP: 0x00000011 [0xc00000011, 0x00000000, 0x00000000, 0x00000000]" << endl;
+    cout << endl;
+    cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
+    cout << endl;
+    cout << "The registry is full, run startup repair to reset it." << endl;
+    cout << "Looks like someone filled the registry with all sorts of junk, huh?" << endl;
+    cout << "Run Startup Repair to restore registry." << endl;
+    cout << endl;
+    cout << "Technical information:" << endl;
+    cout << "*** Size: >2 KB" << endl;
+    cout << "*** REG file found but locked." << endl;
+    cout << endl;
+    cout << "If this is the first time you've seen this error, restart the system." << endl;
+    cout << endl;
+    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+    pause();
+    recoveryEnv();
+    }
+    else if (code == "12") {
+        setColor("17");
+        cout << "*** STOP: 0x00000012 [0xc00000012, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\system.log" << endl;
+        cout << endl;
+        cout << "LOG_OVERFLOW - The system log is full of shit." << endl;
+        cout << "Someone's been writing a novel in system.log." << endl;
+        cout << "150 KB is the limit. Run Startup Repair to clear the log." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Size: >150 KB" << endl;
+        cout << "*** Log file found but locked due to size limit." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
         recoveryEnv();
     }
     else if (code == "14") {
         setColor("17");
         cout << "*** STOP: 0x00000014 [0xc00000014, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\BCD" << endl;
         cout << endl;
         cout << "BCD_NOT_FOUND - The BCD is missing." << endl;
         cout << "Please reinstall or run Startup Repair." << endl;
@@ -491,7 +600,7 @@ void bsod(const string& code) {
         cout << "If this is the first time you've seen this error, restart the system." << endl;
         cout << endl;
         cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-        system("pause");
+        pause();
         recoveryEnv();
     }
     else if (code == "666") {
@@ -499,13 +608,13 @@ void bsod(const string& code) {
         cout << "*** STOP: 0xDEADBEEF [0x00000666, 0x00000000, 0x00000000, 0x00000000]" << endl;
         cout << endl;
         cout << "MANUAL_CRASH - You typed 'bsod' and now you're here." << endl;
-        system("pause");
+        pause();
         bootMenu();
     }
     else {
         setColor("17");
         cout << "*** STOP: 0x00001225a [UNKNOWN_ERROR]" << endl;
-        system("pause");
+        pause();
         exit(1);
     }
 }
@@ -515,16 +624,59 @@ void bsod(const string& code) {
 // =====================================================================
 
 void bootMenu() {
+    if (!dirExists(configRoot)) {
+        bsod("1a");
+    };
+    if (!fileExists(kernelPath)) {
+        bsod("1");
+    };
+    if (!fileExists(regPath)) {
+        bsod("4");
+    };
+    if (!fileExists(configRoot + "\\BCD")) {
+        bsod("14");
+    };
     loadBCD();
     loadRegistry(); {
         if (REG_VERSION_FOUND != std::stoi(REG_VERSION)) {
             bsod("3");
         }
     }
+    string kernel_hash_check = readFile(kernelPath);
+    if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) bsod("2");
+    if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("6");
+
+    HANDLE hKernel = CreateFileA(kernelPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hKernel != INVALID_HANDLE_VALUE) {
+        if (GetFileSize(hKernel, NULL) > MAX_KERNEL_SIZE) {
+            CloseHandle(hKernel);
+            bsod("10");
+        }
+        CloseHandle(hKernel);
+    }
+    HANDLE hReg = CreateFileA(regPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hReg != INVALID_HANDLE_VALUE) {
+        if (GetFileSize(hReg, NULL) > MAX_REGISTRY_SIZE) {
+            CloseHandle(hReg);
+            bsod("11");
+        }
+        CloseHandle(hReg);
+    }
+    HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hLog != INVALID_HANDLE_VALUE) {
+        if (GetFileSize(hLog, NULL) > MAX_LOG_SIZE) {
+            CloseHandle(hLog);
+            bsod("12");
+        }
+        CloseHandle(hLog);
+    }
 
     if (recoveryRequest != "1") {
-        system("cls");
+        clearScreen();
         setColor("0f");
+        diagnostic = 0;
+        safeMode = 0;
+        rec = 0;
         cout << "======================================================================================================================" << endl;
         cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
         cout << "======================================================================================================================" << endl;
@@ -546,11 +698,11 @@ void bootMenu() {
         cout << "Select option (1-7): ";
 
         // Simulate auto-boot with sleep
-        DWORD startTime = GetTickCount();
+        DWORD startTime = GetTickCount64();
         bool keyPressed = false;
         char choice = '1'; // default
 
-        while (GetTickCount() - startTime < (DWORD)(bootTimeout * 1000)) {
+        while (GetTickCount64() - startTime < (DWORD)(bootTimeout * 1000)) {
             if (_kbhit()) {
                 choice = _getch();
                 keyPressed = true;
@@ -602,7 +754,7 @@ void normalBoot() {
 
     // Boot animation
     for (int i = 1; i <= 17; i++) {
-        system("cls");
+        clearScreen();
         setColor("0f");
         cout << "======================================================================================================================" << endl;
         cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
@@ -641,7 +793,7 @@ void normalBoot() {
 }
 
 void safeModeBoot() {
-    system("cls");
+    clearScreen();
     setColor("0f");
     safeMode = 1;
     cout << "======================================================================================================================" << endl;
@@ -650,6 +802,7 @@ void safeModeBoot() {
     Sleep(2000);
 
     if (!fileExists(configRoot + "\\BCD")) {
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] BCD not found" << endl;
         Sleep(3000);
         return;
@@ -703,7 +856,7 @@ void recoveryEnv() {
     diagnostic = 0;
     safeMode = 0;
 
-    system("cls");
+    clearScreen();
     setColor("1f");
     cout << "======================================================================================================================" << endl;
     cout << "                                             ARSLANIUS RECOVERY ENVIRONMENT" << endl;
@@ -765,13 +918,14 @@ void startupRepair() {
     writeLog("KERNEL_RESTORED_BY_RECOVERY");
 
     cout << "[ OK ] Startup Repair completed." << endl;
-    system("pause");
+    pause();
 }
 
 void restoreMenu() {
     if (!dirExists(restoreRoot)) {
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] No restore points directory." << endl;
-        system("pause");
+        pause();
         return;
     }
 
@@ -800,8 +954,9 @@ void restoreMenu() {
 
     string rpPath = restoreRoot + "\\" + rpSel;
     if (!dirExists(rpPath) || !fileExists(rpPath + "\\kernel.dll")) {
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] Invalid restore point." << endl;
-        system("pause");
+        pause();
         return;
     }
 
@@ -812,7 +967,7 @@ void restoreMenu() {
     writeLog("RESTORE_APPLIED_FROM_RECOVERY: " + rpSel);
 
     cout << "[ OK ] System restored from " << rpSel << "." << endl;
-    system("pause");
+    pause();
 }
 
 void imageRecovery() {
@@ -824,8 +979,9 @@ void imageRecovery() {
         cout << "[ FOUND ] Backup directory detected." << endl;
     }
     else {
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] No backup image found." << endl;
-        system("pause");
+        pause();
         return;
     }
 
@@ -844,11 +1000,11 @@ void imageRecovery() {
 
     writeLog("IMAGE_RESTORE_EXECUTED");
     cout << "[ OK ] System image restored." << endl;
-    system("pause");
+    pause();
 }
 
 void memoryDiag() {
-    system("cls");
+    clearScreen();
     setColor("1f");
     cout << "======================================================================================================================" << endl;
     cout << "                                             ARSLANIUS MEMORY DIAGNOSTIC" << endl;
@@ -866,7 +1022,7 @@ void memoryDiag() {
     cout << "[ PASS ] Memory test complete. No errors detected." << endl;
     cout << "Total memory simulated: " << total << " MB" << endl;
     cout << "Status: Healthy" << endl;
-    system("pause");
+    pause();
 }
 
 // =====================================================================
@@ -880,7 +1036,7 @@ void logonScreen() {
     acpiRequest = 0;
     logoutRequest = 0;
 
-    system("cls");
+    clearScreen();
     setColor("5b");
     cout << "======================================================================================================================" << endl;
     cout << "                                              " << osName << " LOCK SCREEN" << endl;
@@ -969,8 +1125,9 @@ void logonScreen() {
     }
 
     if (!found) {
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] User not found." << endl;
-        system("pause");
+        pause();
         logonScreen();
         return;
     }
@@ -1008,12 +1165,13 @@ void logonScreen() {
         f << loginAttempts;
         f.close();
 
+        PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
         cout << "[ ERROR ] Password incorrect. (Attempt " << loginAttempts << "/" << MAX_LOGIN_ATTEMPTS << ")" << endl;
         if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
             bsod("9");
             return;
         }
-        system("pause");
+        pause();
         logonScreen();
     }
 }
@@ -1078,7 +1236,7 @@ void interfaceScreen() {
 
     SetCurrentDirectoryA(userHome.c_str());
 
-    system("cls");
+    clearScreen();
     if (diagnostic == 2 || diagnostic == 1 || rec == 1) setColor("0e");
     if (safeMode == 1) setColor("07");
 
@@ -1112,7 +1270,7 @@ void cmdLoop() {
     while (true) {
         // Check logout
         if (logoutRequest) {
-            system("cls");
+            clearScreen();
             setColor("5b");
             cout << "\n\n                                                      Logout...\n\n";
             Sleep(2000);
@@ -1132,10 +1290,10 @@ void cmdLoop() {
         }
 
         if (waitMode) {
-            system("cls");
+            clearScreen();
             setColor("0f");
             cout << "\n\n                                                  " << osName << "\n\n";
-            system("pause");
+            pause();
             waitMode = 0;
         }
         // services
@@ -1164,6 +1322,7 @@ void cmdLoop() {
                         reg_ins << "USER_COLOR=1f" << endl;
                         reg_ins << "ENABLE_LUA=1" << endl;
                         reg_ins << "REG_VERSION=" << REG_VERSION << endl;
+                        writeFile(regPath, reg_ins.str());
 
                     }
                 }
@@ -1173,25 +1332,27 @@ void cmdLoop() {
                 if (PulseCheck == 5) {
                     writeLog("BarOS SERVICE\\SYSPULSE: System Health OK");
                 }
-                if (fileExists(sysServices + "\\NetMonitor.active")) {
-                    int NetCheck = rand() % 10;
-                    if (NetCheck == 5) {
-                        string host = "github.com";
-                        string NetCheckS = "ping -n 1 " + host + " >nul 2>&1";
-                        int NetCheckResult = system(NetCheckS.c_str());
-                        if (NetCheckResult != 0) {
-                            cout << "BarOS SERVICE\\NETMONITOR: OFFLINE" << endl;
-                            writeLog("BarOS SERVICE\\NETMONITOR: OFFLINE");
-                        }
-                        else {
-                            cout << "BarOS SERVICE\\NETMONITOR: ONLINE" << endl;
-                            writeLog("BarOS SERVICE\\NETMONITOR: ONLINE");
-                        }
+            }
+            if (fileExists(sysServices + "\\NetMonitor.active")) {
+                int NetCheck = rand() % 10;
+                if (NetCheck == 5) {
+                    string host = "github.com";
+                    string NetCheckS = "ping -n 1 " + host + " >nul 2>&1";
+                    int NetCheckResult = system(NetCheckS.c_str());
+                    if (NetCheckResult != 0) {
+                        cout << "BarOS SERVICE\\NETMONITOR: OFFLINE" << endl;
+                        writeLog("BarOS SERVICE\\NETMONITOR: OFFLINE");
+                    }
+                    else {
+                        cout << "BarOS SERVICE\\NETMONITOR: ONLINE" << endl;
+                        writeLog("BarOS SERVICE\\NETMONITOR: ONLINE");
+
                     }
                 }
             }
         }
         // Prompt
+        sudo_command = 0;
         cout << currentUser << "@ARSLANIUS> ";
         string cmd;
         getline(cin, cmd);
@@ -1203,7 +1364,7 @@ void cmdLoop() {
     }
 }
 
-    void core(const string & cmd) {
+void core(const string& cmd) {
     vector<string> parts = split(cmd, ' ');
     if (parts.empty()) return;
 
@@ -1237,6 +1398,7 @@ void cmdLoop() {
         }
         cout << "Enter ADMIN password: ";
         string a_p;
+        sudo_command = 0;
         char ch;
         while ((ch = _getch()) != '\r') {
             if (ch == '\b') {
@@ -1252,9 +1414,12 @@ void cmdLoop() {
         if (checkHash(a_p, EXPECTED_ADMIN_HASH)) {
             writeLog("SUDO_EXEC: " + t_c + " BY " + currentUser);
             ex_c = t_c;
+            sudo_command = 1;
             core(ex_c);
         }
         else {
+            sudo_command = 0;
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Access denied." << endl;
         }
         return;
@@ -1262,6 +1427,129 @@ void cmdLoop() {
 
     // Command routing
     transform(ex_c.begin(), ex_c.end(), ex_c.begin(), ::tolower);
+
+    if (currentUser == "GUEST") {
+        bool allowed = false;
+        vector<string> guestCmds = { "help", "lock", "wait_mode", "echo", "ls", "cd",
+                                     "lockmenu", "report", "cls", "ver", "whoami",
+                                     "calc", "notepad", "reboot", "shutdown" };
+        for (const string& c : guestCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Guest cannot use this command." << endl;
+            return;
+        }
+    }
+
+    if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
+        bool allowed = false;
+        vector<string> tiCmds = { "help", "mv", "bcdboot", "cp", "rm", "touch", "edit",
+                                  "echo", "bcdedit", "mkdir", "ls", "cd", "cat", "ren",
+                                  "reset", "reboot_to_recovery", "cls", "ver", "whoami",
+                                  "events", "sfc", "adduser", "deluser", "regedit",
+                                  "reboot", "shutdown" };
+        for (const string& c : tiCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Restricted." << endl;
+            return;
+        }
+    }
+
+    if (currentUser == "BarOS SERVICE\\SysPulse") {
+        bool allowed = false;
+        vector<string> spCmds = { "help", "ls", "sysinfo", "events", "report", "echo",
+                                  "taskmgr", "cd", "cat", "reboot", "shutdown",
+                                  "reboot_to_recovery", "cls", "ver", "whoami" };
+        for (const string& c : spCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Restricted." << endl;
+            return;
+        }
+    }
+
+    if (currentUser == "BarOS SERVICE\\NetMonitor") {
+        bool allowed = false;
+        vector<string> nmCmds = { "help", "reboot", "ping", "netstat", "ipconfig",
+                                  "echo", "tracert", "nslookup", "arp", "route",
+                                  "shutdown", "cls", "whoami" };
+        for (const string& c : nmCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Restricted." << endl;
+            return;
+        }
+    }
+
+    if (safeMode == 1) {
+        bool allowed = false;
+        vector<string> safeCmds = { "help", "lock", "wait_mode", "lockmenu", "mv", "cp",
+                                    "echo", "bcdboot", "bcdedit", "rm", "touch", "mkdir",
+                                    "ls", "cd", "cat", "ren", "backup", "backup-restore",
+                                    "sysinfo", "reset", "reboot_to_recovery", "report",
+                                    "cls", "ver", "whoami", "events", "sfc", "restore-point",
+                                    "restore", "adduser", "deluser", "regedit", "reboot",
+                                    "shutdown" };
+        for (const string& c : safeCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Safe mode restriction." << endl;
+            return;
+        }
+    }
+
+    if (currentUser == "SYSTEM ADMINISTRATOR") {
+        bool allowed = false;
+        vector<string> adminCmds = { "help", "calc", "ping", "wait_mode", "lockmenu",
+                                     "echo", "autorun", "bcdedit", "bcdboot", "netstat",
+                                     "ipconfig", "tracert", "nslookup", "arp", "route",
+                                     "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
+                                     "bsod", "touch", "mkdir", "ls", "cd", "cat", "ren",
+                                     "backup", "backup-restore", "lock", "events",
+                                     "reboot_to_recovery", "report", "cls", "ver", "whoami",
+                                     "shutdown", "reboot", "adduser", "start", "sfc",
+                                     "clean", "mail-read", "mail-send", "edit", "guest",
+                                     "regedit", "deluser", "alert", "restore-point",
+                                     "restore" };
+        for (const string& c : adminCmds) {
+            if (ex_c == c) { allowed = true; break; }
+        }
+        if (!allowed) {
+            cout << "[ SECURITY ] Restricted context." << endl;
+            return;
+        }
+    }
+
+    if (enableLua == 1 && 
+        currentUser != "BarOS AUTHORITY\\SYSTEM" &&
+        currentUser != "SYSTEM ADMINISTRATOR" &&
+        currentUser != "BarOS SERVICE\\TrustedInstaller" &&
+        currentUser != "BarOS SERVICE\\SysPulse" &&
+        currentUser != "BarOS SERVICE\\NetMonitor" &&
+        sudo_command == 0) {
+        bool allowed = false;
+        vector<string> userCmds = { "help", "mkdir", "wait_mode", "echo", "lockmenu",
+                                    "autorun", "ping", "cp", "mv", "touch", "backup",
+                                    "ls", "cd", "cat", "ren", "backup-restore", "passwd",
+                                    "reboot_to_recovery", "lock", "calc", "sysinfo",
+                                    "restore", "restore-point", "mail-send", "mail-read",
+                                    "clean", "report", "cls", "ver", "whoami", "calc",
+                                    "notepad", "reboot", "shutdown" };
+        for (const string& c : userCmds) {
+            if (ex_c == c) { allowed = true; sudo_command = 0; break; }
+        }
+        if (!allowed) {
+            cout << "Error: Access Denied. Use \"sudo " << ex_c << "\"." << endl;
+            sudo_command = 0;
+            return;
+        }
+    }
 
     if (ex_c == "help" || ex_c == "?") {
         cout << "Apps: Notepad, Calc, taskmgr, edit, install, regedit, ArsStore, sysinfo" << endl;
@@ -1286,6 +1574,7 @@ void cmdLoop() {
                 cout << "[ OK ] Directory changed to " << userHome << endl;
             }
             else {
+                PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
                 cout << "[ ERROR ] Invalid path." << endl;
             }
         }
@@ -1299,6 +1588,7 @@ void cmdLoop() {
             cout << readFile(targetFile) << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] File not found." << endl;
         }
     }
@@ -1308,6 +1598,7 @@ void cmdLoop() {
         getline(cin, autorunCmd);
         autorunCmd = trim(autorunCmd);
         if (autorunCmd.empty()) {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Command cannot be empty." << endl;
             return;
         }
@@ -1324,6 +1615,7 @@ void cmdLoop() {
             cout << "[ OK ] Folder created." << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Failed to create folder." << endl;
         }
     }
@@ -1355,6 +1647,7 @@ void cmdLoop() {
             cout << "[ OK ] Copied." << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Copy failed." << endl;
         }
     }
@@ -1370,6 +1663,7 @@ void cmdLoop() {
             cout << "[ OK ] Moved." << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Move failed." << endl;
         }
     }
@@ -1382,6 +1676,7 @@ void cmdLoop() {
             cout << "[ OK ] Deleted." << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Delete failed." << endl;
         }
     }
@@ -1397,6 +1692,7 @@ void cmdLoop() {
             cout << "[ OK ] Renamed." << endl;
         }
         else {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Rename failed." << endl;
         }
     }
@@ -1415,7 +1711,7 @@ void cmdLoop() {
         if (confirm == "YES") {
             startupRepair();
             cout << "[ OK ] System reset completed. Rebooting..." << endl;
-            system("pause");
+            pause();
             rebootScreen();
         }
         else {
@@ -1453,7 +1749,7 @@ void cmdLoop() {
         case '3': logoutRequest = 1; acpiRequest = 1; break;
         case '4': logoutRequest = 1; acpiRequest = 2; break;
         case '5': core("help"); break;
-        case '6': return; 
+        case '6': return;
         }
     }
     else if (ex_c == "adduser") {
@@ -1462,12 +1758,14 @@ void cmdLoop() {
         getline(cin, nu);
         nu = trim(nu);
         if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR") {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Reserved username." << endl;
             return;
         }
-        string user_exists = readFile( kernelPath );
+        string user_exists = readFile(kernelPath);
         if (user_exists.find(nu + " =") != string::npos) {
-            cout << "[ERROR] User arleady exists." << endl;
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+            cout << "[ ERROR ] User arleady exists." << endl;
             return;
         }
         cout << "Password: ";
@@ -1495,6 +1793,7 @@ void cmdLoop() {
         getline(cin, du);
         du = trim(du);
         if (du == "SYSTEM" || du == "SYSTEM ADMINISTRATOR") {
+            PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
             cout << "[ ERROR ] Restricted." << endl;
             return;
         }
@@ -1713,7 +2012,7 @@ void cmdLoop() {
 }
 
 void shutdownScreen() {
-    system("cls");
+    clearScreen();
     setColor("9f");
     cout << "\n\n\n\n\n\n\n\n\n                                               SHUTTING DOWN\n\n\n\n\n\n\n\n\n";
     cout << "                                               " << osName << endl;
@@ -1725,7 +2024,7 @@ void shutdownScreen() {
 }
 
 void rebootScreen() {
-    system("cls");
+    clearScreen();
     setColor("9f");
     cout << "\n\n\n\n\n\n\n\n\n                                               REBOOTING\n\n\n\n\n\n\n\n\n";
     cout << "                                               " << osName << endl;
@@ -1745,22 +2044,6 @@ int main() {
 
     initPaths();
     ensureDirectories();
-
-    if (!dirExists(configRoot)) {
-        bsod("1a");
-    };
-    if (!fileExists(kernelPath)) {
-        bsod("1");
-    };
-    if (!fileExists(regPath)) {
-        bsod("4");
-    };
-    if (!fileExists(configRoot + "\\BCD")) {
-        bsod("14");
-    };
-    string kernel_hash_check = readFile(kernelPath);
-    if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) bsod("2");
-    if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("6");
 
     bootMenu();
 
