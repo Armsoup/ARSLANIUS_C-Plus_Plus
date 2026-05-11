@@ -2,7 +2,7 @@
 
 ARSLANIUS 28 On C++ is a portable console operating system ported from the original [ARSLANIUS 28](https://github.com/Armsoup/ARSLANIUS) to native C++17 (x64).
 
-PLEASE SEND YOUR IDEAS on Telegram or Discussions.
+PLEASE SEND YOUR IDEAS on [Telegram](https://t.me/+8FQ20tOaKI5lNGMy) or [Discussions](https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/discussions)
 
 > **What Windows NT was to Windows 9x — same interface, completely new kernel.**
 
