@@ -25,7 +25,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.5";
+const string CURRENT_BUILD = "58.1.0";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -76,11 +76,11 @@ int setup = 0;
 int system_hash_found = 0;
 int admin_hash_found = 0;
 int sudo_command = 0;
-string recoveryRequest = "0";
-
+int lockdown = 0;
 string systemColor = "0e";
 string adminColor = "4f";
 string userColor = "1f";
+string recoveryRequest = "0";
 
 string regKey = "SYSTEM_COLOR";
 
@@ -125,6 +125,7 @@ void writeFile(const string& path, const string& content);
 void appendFile(const string& path, const string& content);
 void setColor(const string& colorCode);
 void oobe();
+void SetConsoleWidthOnly(int newWidth);
 
 // =====================================================================
 // IMPLEMENTATION: UTILITY FUNCTIONS
@@ -248,7 +249,7 @@ bool checkHash(const string& input, const string& expectedHash) {
 
 void pause() {
     cout << "Press any key to continue...";
-    _getch(); 
+    _getch();
     cout << endl;
 }
 
@@ -346,7 +347,7 @@ void installapp(const string& app_id) {
     }
 }
 
-void check_kernel () {
+void check_kernel() {
     vector<string> linesToFind = {
         "SYSTEM =",
         "SYSTEM ADMINISTRATOR ="
@@ -365,13 +366,34 @@ void check_kernel () {
     }
 }
 
+void SetConsoleWidthOnly(int newWidth) {
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+
+    if (!GetConsoleScreenBufferInfo(hOut, &csbi)) return;
+
+    short currentHeight = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+
+    COORD newBufferSize = { (short)newWidth, csbi.dwSize.Y };
+    SetConsoleScreenBufferSize(hOut, newBufferSize);
+
+    SMALL_RECT rect;
+    rect.Left = csbi.srWindow.Left;
+    rect.Top = csbi.srWindow.Top;
+    rect.Right = csbi.srWindow.Left + (short)newWidth - 1;
+    rect.Bottom = csbi.srWindow.Top + currentHeight - 1;
+
+    SetConsoleWindowInfo(hOut, TRUE, &rect);
+}
+
 void check_registry() {
     vector<string> linesToFind = {
-        "OS_NAME =",
+        "OS_NAME=",
         "SYSTEM_COLOR=",
         "ADMIN_COLOR=",
         "USER_COLOR=",
         "ENABLE_LUA=",
+        "LOCKDOWN=",
         "SETUP=",
         "REG_VERSION="
     };
@@ -382,7 +404,8 @@ void check_registry() {
         string lowerSearch = searchFor;
         transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), ::tolower);
         if (lowerContent.find(lowerSearch) != string::npos) {
-        } else {
+        }
+        else {
             bsod("7");
         }
     }
@@ -432,6 +455,10 @@ void loadRegistry() {
         try {
             if (key == "OS_NAME") osName = value;
             else if (key == "ENABLE_LUA") enableLua = stoi(value);
+            else if (key == "LOCKDOWN") lockdown = stoi(value);
+            else if (key == "SYSTEM_COLOR") systemColor = stoi(value);
+            else if (key == "ADMIN_COLOR") adminColor = stoi(value);
+            else if (key == "USER_COLOR") userColor = stoi(value);
             else if (key == "REG_VERSION") REG_VERSION_FOUND = stoi(value);
             else if (key == "SETUP") setup = stoi(value);
         }
@@ -456,19 +483,19 @@ void saveBCD() {
 void Manual() {
     clearScreen();
     cout << "======================================================================================================================" << endl;
-    cout << "                                         ARSLANIUS 28 - USER MANUAL" << endl;
+    cout << "                                         " << osName << " - USER MANUAL" << endl;
     cout << "======================================================================================================================" << endl;
-    cout << "" << endl;
+    cout << endl;
     cout << "[ QUICK START ]" << endl;
     cout << "1. First run? Press R at BSoD then press 1 [Startup Repair]" << endl;
     cout << "2. Login as SYSTEM ADMINISTRATOR [password: Jiupolaqmn_isArslanius-lo]" << endl;
     cout << "3. Type 'adduser', then enter your name and your password" << endl;
     cout << "4. Type 'lock', then login as your user" << endl;
-    cout << "" << endl;
+    cout << endl;
     cout << "[ ARSLANIUS BOOT MANAGER ]" << endl;
     cout << "  - Press 1-7 to select mode" << endl;
     cout << "  - Auto-boot in %boot_timeout% seconds" << endl;
-    cout << "" << endl;
+    cout << endl;
     cout << "[ COMMANDS ]" << endl;
     cout << "System: help, lock, cls, ver, whoami, reboot, shutdown, lockmenu [ctrl alt del]" << endl;
     cout << "Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
@@ -476,7 +503,7 @@ void Manual() {
     cout << "Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
     cout << "Recovery: backup, backup-restore, restore-point, restore, sfc, events" << endl;
     cout << "Fun: bsod, Notepad, wait_mode, echo" << endl;
-    cout << "" << endl;
+    cout << endl;
     cout << "[ RECOVERY ENVIRONMENT ]" << endl;
     cout << "1 [Startup Repair] - recreates all files" << endl;
     cout << "4 [Mini cmd] - command line with recovery tools" << endl;
@@ -501,12 +528,13 @@ void Update() {
         saveBCD();
 
         stringstream reg_update;
-        reg_update << "OS_NAME = ARSLANIUS 28" << endl;
+        reg_update << "OS_NAME=ARSLANIUS 28" << endl;
         reg_update << "SYSTEM_COLOR=0e" << endl;
         reg_update << "ADMIN_COLOR=4f" << endl;
         reg_update << "USER_COLOR=1f" << endl;
         reg_update << "ENABLE_LUA=1" << endl;
-        reg_update << "SETUP=0" << endl; 
+        reg_update << "LOCKDOWN=0" << endl;
+        reg_update << "SETUP=0" << endl;
         reg_update << "REG_VERSION=" << REG_VERSION << endl;
         writeFile(regPath, reg_update.str());
         bootMenu();
@@ -670,23 +698,23 @@ void bsod(const string& code) {
         recoveryEnv();
     }
     else if (code == "8") {
-    setColor("17");
-    cout << "*** STOP: 0x00000008 [0xc00000008, 0x00000000, 0x00000000, 0x00000000]" << endl;
-    cout << endl;
-    cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
-    cout << endl;
-    cout << "KERNEL_INCOMPLETE - The kernel is missing required SYSTEM or ADMINISTRATOR entries." << endl;
-    cout << "Someone deleted important lines from kernel.dll. Probably with Notepad." << endl;
-    cout << endl;
-    cout << "Technical information:" << endl;
-    cout << "*** Missing: SYSTEM or SYSTEM ADMINISTRATOR account" << endl;
-    cout << "*** Kernel file found but incomplete." << endl;
-    cout << endl;
-    cout << "If this is the first time you've seen this error, restart the system." << endl;
-    cout << endl;
-    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-    pause();
-    recoveryEnv();
+        setColor("17");
+        cout << "*** STOP: 0x00000008 [0xc00000008, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+        cout << endl;
+        cout << "KERNEL_INCOMPLETE - The kernel is missing required SYSTEM or ADMINISTRATOR entries." << endl;
+        cout << "Someone deleted important lines from kernel.dll. Probably with Notepad." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Missing: SYSTEM or SYSTEM ADMINISTRATOR account" << endl;
+        cout << "*** Kernel file found but incomplete." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
     }
     else if (code == "9") {
         setColor("17");
@@ -709,44 +737,44 @@ void bsod(const string& code) {
         recoveryEnv();
     }
     else if (code == "10") {
-    setColor("17");
-    cout << "*** STOP: 0x00000010 [0xc00000010, 0x00000000, 0x00000000, 0x00000000]" << endl;
-    cout << endl;
-    cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
-    cout << endl;
-    cout << "The kernel is full, run startup repair to reset it." << endl;
-    cout << "Looks like someone needed TOO many accounts." << endl;
-    cout << "Run Startup Repair to restore kernel." << endl;
-    cout << endl;
-    cout << "Technical information:" << endl;
-    cout << "*** Size: >12 KB" << endl;
-    cout << "*** Kernel file found but locked." << endl;
-    cout << endl;
-    cout << "If this is the first time you've seen this error, restart the system." << endl;
-    cout << endl;
-    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-    pause();
-    recoveryEnv();
+        setColor("17");
+        cout << "*** STOP: 0x00000010 [0xc00000010, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
+        cout << endl;
+        cout << "The kernel is full, run startup repair to reset it." << endl;
+        cout << "Looks like someone needed TOO many accounts." << endl;
+        cout << "Run Startup Repair to restore kernel." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Size: >12 KB" << endl;
+        cout << "*** Kernel file found but locked." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
     }
     else if (code == "11") {
-    setColor("17");
-    cout << "*** STOP: 0x00000011 [0xc00000011, 0x00000000, 0x00000000, 0x00000000]" << endl;
-    cout << endl;
-    cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
-    cout << endl;
-    cout << "The registry is full, run startup repair to reset it." << endl;
-    cout << "Looks like someone filled the registry with all sorts of junk, huh?" << endl;
-    cout << "Run Startup Repair to restore registry." << endl;
-    cout << endl;
-    cout << "Technical information:" << endl;
-    cout << "*** Size: >2 KB" << endl;
-    cout << "*** REG file found but locked." << endl;
-    cout << endl;
-    cout << "If this is the first time you've seen this error, restart the system." << endl;
-    cout << endl;
-    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-    pause();
-    recoveryEnv();
+        setColor("17");
+        cout << "*** STOP: 0x00000011 [0xc00000011, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
+        cout << endl;
+        cout << "The registry is full, run startup repair to reset it." << endl;
+        cout << "Looks like someone filled the registry with all sorts of junk, huh?" << endl;
+        cout << "Run Startup Repair to restore registry." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** Size: >2 KB" << endl;
+        cout << "*** REG file found but locked." << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
     }
     else if (code == "12") {
         setColor("17");
@@ -769,24 +797,24 @@ void bsod(const string& code) {
         recoveryEnv();
     }
     else if (code == "13") {
-    setColor("17");
-    cout << "*** STOP: 0x00000013 [0xc00000013, 0x00000000, 0x00000000, 0x00000000]" << endl;
-    cout << endl;
-    cout << "*** File: \\Settings And System Files\\BCD" << endl;
-    cout << endl;
-    cout << "BCD_CORRUPTED - The BCD is missing required entries." << endl;
-    cout << "DEFAULT_MODE or BOOT_TIMEOUT is missing." << endl;
-    cout << "Run Startup Repair to restore the BCD." << endl;
-    cout << endl;
-    cout << "Technical information:" << endl;
-    cout << "*** BCD file found but incomplete." << endl;
-    cout << "*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE" << endl;
-    cout << endl;
-    cout << "If this is the first time you've seen this error, restart the system." << endl;
-    cout << endl;
-    cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
-    pause();
-    recoveryEnv();
+        setColor("17");
+        cout << "*** STOP: 0x00000013 [0xc00000013, 0x00000000, 0x00000000, 0x00000000]" << endl;
+        cout << endl;
+        cout << "*** File: \\Settings And System Files\\BCD" << endl;
+        cout << endl;
+        cout << "BCD_CORRUPTED - The BCD is missing required entries." << endl;
+        cout << "DEFAULT_MODE or BOOT_TIMEOUT is missing." << endl;
+        cout << "Run Startup Repair to restore the BCD." << endl;
+        cout << endl;
+        cout << "Technical information:" << endl;
+        cout << "*** BCD file found but incomplete." << endl;
+        cout << "*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE" << endl;
+        cout << endl;
+        cout << "If this is the first time you've seen this error, restart the system." << endl;
+        cout << endl;
+        cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+        pause();
+        recoveryEnv();
     }
     else if (code == "14") {
         setColor("17");
@@ -895,7 +923,7 @@ void bootMenu() {
     }
     if (setup == 1) {
         setColor("1f");
-        cout << "Welcome to OOBE ARSLANIUS 28! Do you want to start?" << endl;
+        cout << "Welcome to OOBE " << osName << "! Do you want to start?" << endl;
         cout << "Y/N: ";
         char choice = _getch();
         choice = tolower(choice);
@@ -939,11 +967,12 @@ void bootMenu() {
             cout << "[ OK ] User created." << endl;
             pause();
             stringstream reg;
-            reg << "OS_NAME = ARSLANIUS 28" << endl;
+            reg << "OS_NAME=ARSLANIUS 28" << endl;
             reg << "SYSTEM_COLOR=0e" << endl;
             reg << "ADMIN_COLOR=4f" << endl;
             reg << "USER_COLOR=1f" << endl;
             reg << "ENABLE_LUA=1" << endl;
+            reg << "LOCKDOWN=0" << endl;
             reg << "SETUP=0" << endl;
             reg << "REG_VERSION=" << REG_VERSION << endl;
             writeFile(regPath, reg.str());
@@ -1049,7 +1078,7 @@ void normalBoot() {
         cout << "======================================================================================================================" << endl;
         cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
         cout << "======================================================================================================================" << endl;
-        cout << "                                                  Loading ARSLANIUS 28" << endl;
+        cout << "                                                  Loading " << osName << endl;
         cout << endl;
         cout << "         Build: " << currentBuild << endl;
         cout << "         Kernel: BarOS 23.1" << endl;
@@ -1197,11 +1226,12 @@ void startupRepair() {
 
     // Create REG.cfg
     stringstream reg;
-    reg << "OS_NAME = ARSLANIUS 28" << endl;
+    reg << "OS_NAME=ARSLANIUS 28" << endl;
     reg << "SYSTEM_COLOR=0e" << endl;
     reg << "ADMIN_COLOR=4f" << endl;
     reg << "USER_COLOR=1f" << endl;
     reg << "ENABLE_LUA=1" << endl;
+    reg << "LOCKDOWN=1" << endl;
     reg << "SETUP=1" << endl;
     reg << "REG_VERSION=" << REG_VERSION << endl;
     writeFile(regPath, reg.str());
@@ -1468,6 +1498,16 @@ void logonScreen() {
 }
 
 void applyColor() {
+    if (currentUser == "Armsoup") {
+        cout << "[ ERROR ] Login denied by the system" << endl;
+        pause();
+        logonScreen();
+    }
+    if (lockdown == 1) {
+        cout << "[ ERROR ] Login denied by registry policy" << endl;
+        pause();
+        logonScreen();
+    }
     if (fileExists(regPath)) {
         string reg = readFile(regPath);
         istringstream iss(reg);
@@ -1620,12 +1660,13 @@ void cmdLoop() {
                     }
                     if (!fileExists(regPath)) {
                         stringstream reg_ins;
-                        reg_ins << "OS_NAME = ARSLANIUS 28" << endl;
+                        reg_ins << "OS_NAME=ARSLANIUS 28" << endl;
                         reg_ins << "SYSTEM_COLOR=0e" << endl;
                         reg_ins << "ADMIN_COLOR=4f" << endl;
                         reg_ins << "USER_COLOR=1f" << endl;
                         reg_ins << "ENABLE_LUA=1" << endl;
-                        reg_ins << "SETUP=0" << endl;
+                        reg_ins << "LOCKDOWN=1" << endl;
+                        reg_ins << "SETUP=1" << endl;
                         reg_ins << "REG_VERSION=" << REG_VERSION << endl;
                         writeFile(regPath, reg_ins.str());
                         cout << "[BarOS SERVICE\TrustedInstaller] System restored." << endl;
@@ -1842,7 +1883,7 @@ void core(const string& cmd) {
         }
     }
 
-    if (enableLua == 1 && 
+    if (enableLua == 1 &&
         currentUser != "BarOS AUTHORITY\\SYSTEM" &&
         currentUser != "SYSTEM ADMINISTRATOR" &&
         currentUser != "BarOS SERVICE\\TrustedInstaller" &&
@@ -2253,10 +2294,40 @@ void core(const string& cmd) {
         }
     }
     else if (ex_c == "sysinfo") {
-        cout << "Current User: " << currentUser << endl;
-        cout << "Home: " << userHome << endl;
-        cout << "OS: " << osName << " Build " << currentBuild << endl;
-        cout << "Safe Mode: " << safeMode << endl;
+        clearScreen();
+        cout << "======================================================================================================================" << endl;
+        cout << "                                                ARSLANIUS SYSTEM INFORMATION" << endl;
+        cout << "======================================================================================================================" << endl;
+        cout << endl;
+        cout << "[USER]" << endl;
+        cout << "  Current User  : " << currentUser << endl;
+        cout << "  Home          : " << userHome << endl;
+        cout << endl;
+        cout << "[SYSTEM]" << endl;
+        cout << "  OS Name       : " << osName << endl;
+        cout << "  Build         : " << currentBuild << endl;
+        cout << "  Kernel        : BarOS 23.1" << endl;
+        cout << "  Safe Mode     : " << safeMode << endl;
+        cout << endl;
+        cout << "[SERVICES]" << endl;
+        if (fileExists(sysServices + "\\SysPulse.active")) {
+            cout << "  BarOS SERVICE\SysPulse          : ONLINE" << endl;
+        }
+        else {
+            cout << "  BarOS SERVICE\SysPulse          : OFFLINE" << endl;
+        }
+        if (fileExists(sysServices + "\\TrustedInstaller.active")) {
+            cout << "  BarOS SERVICE\TrustedInstaller  : ONLINE" << endl;
+        } else {
+            cout << "  BarOS SERVICE\TrustedInstaller  : OFFLINE" << endl;
+        }
+        if (fileExists(sysServices + "\\NetMonitor.active")) {
+            cout << "  BarOS SERVICE\NetMonitor        : ONLINE" << endl;
+        }
+        else {
+            cout << "  BarOS SERVICE\NetMonitor        : OFFLINE" << endl;
+        }
+        pause();
     }
     else if (ex_c == "reboot_to_recovery") {
         recoveryRequest = "1";
@@ -2299,11 +2370,12 @@ void core(const string& cmd) {
         if (!input.empty()) osName = input;
 
         stringstream reg;
-        reg << "OS_NAME = " << osName << endl;
+        reg << "OS_NAME=" << osName << endl;
         reg << "SYSTEM_COLOR=0e" << endl;
         reg << "ADMIN_COLOR=4f" << endl;
         reg << "USER_COLOR=1f" << endl;
         reg << "ENABLE_LUA=1" << endl;
+        reg << "LOCKDOWN=0" << endl;
         reg << "SETUP=0" << endl;
         reg << "REG_VERSION=" << REG_VERSION << endl;
         writeFile(regPath, reg.str());
@@ -2327,7 +2399,9 @@ void core(const string& cmd) {
         system("notepad.exe");
     }
     else if (ex_c == "calc") {
-        system("calc.exe");
+        std::string calcPath = programsRoot + "\\Calc.bat";
+        std::string command = "start \"\" \"" + calcPath + "\"";
+        system(command.c_str());
     }
     else if (ex_c == "ping") {
         cout << "Enter host: ";
@@ -2340,8 +2414,17 @@ void core(const string& cmd) {
     else if (ex_c == "ipconfig") {
         system("ipconfig /all");
     }
+    else if (ex_c == "arp") {
+        system("arp -a");
+    }
+    else if (ex_c == "route") {
+        system("route print");
+    }
     else if (ex_c == "netstat") {
         system("netstat -an");
+    }
+    else if (ex_c == "nslookup") {
+        system("nslookup");
     }
     else {
         cout << "\"" << ex_c << "\" is not recognized." << endl;
@@ -2377,7 +2460,9 @@ void rebootScreen() {
 // =====================================================================
 
 int main() {
-    SetConsoleTitleA("ARSLANIUS 28");
+    SetConsoleTitleA("ARSLANIUS 28 Beta 1");
+
+    SetConsoleWidthOnly(120);
 
     initPaths();
     ensureDirectories();
