@@ -61,7 +61,7 @@ Build 58.1.0
 
 1 - STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
 
-0 - PATCH
+0 - PATCH OR VERSION BETA/ALPHA/RC
       
 * * *
 
