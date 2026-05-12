@@ -99,7 +99,7 @@ How to Run
 
 2. Launch ARSLANIUS 28.exe.
 
-3. On first boot, complete OOBE to create your user account.
+3. On first boot, complete OOBE (Out-Of-Box Experience) to create your user account.
 
 4. Login as your user.
 
