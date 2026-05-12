@@ -53,6 +53,16 @@ Features
 • x64 native — no 32-bit limitations
 
 * * *
+Build numbering logic
+
+Build 58.1.0
+      │  │ └─ PATCH
+      
+      │  └─ STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
+      
+      └─ VERSION (For example, ARSLANIUS 28 - 58.x.x)
+      
+* * *
 
 System Structure
 
