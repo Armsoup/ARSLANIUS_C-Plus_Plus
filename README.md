@@ -57,9 +57,9 @@ Build numbering logic
 
 Build 58.1.0
 
-/.....│  │ └─ PATCH
+/.....│..│.└─ PATCH
 
-/.....│  └─ STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
+/.....│..└─ STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
 
 /.....└─ VERSION (For example, ARSLANIUS 28 - 58.x.x)
       
