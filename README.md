@@ -56,11 +56,12 @@ Features
 Build numbering logic
 
 Build 58.1.0
-/     │  │ └─ PATCH
 
-/     │  └─ STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
+/.....│  │ └─ PATCH
 
-/     └─ VERSION (For example, ARSLANIUS 28 - 58.x.x)
+/.....│  └─ STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
+
+/.....└─ VERSION (For example, ARSLANIUS 28 - 58.x.x)
       
 * * *
 
