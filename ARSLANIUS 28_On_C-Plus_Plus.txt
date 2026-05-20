@@ -1,3 +1,54 @@
+// arslanius.h - ARSLANIUS Driver SDK
+// #ifndef ARSLANIUS_SDK_H
+// #define ARSLANIUS_SDK_H
+
+// BarOSSTATUS codes
+// #define BAROS_SUCCESS 0
+// #define BAROS_ERROR 1
+// #define BAROS_CRITICAL 2
+
+// #include <string>
+// #include <functional>
+
+// using CommandHandler = std::function<void(const std::string& args)>;
+
+// struct ARSLANIUS_API {
+//     void (*register_command)(const char* name, CommandHandler handler);
+//     void (*print)(const char* text);
+//     void (*print_slow)(const char* text);
+//     const char* (*read_registry)(const char* key);
+//     void (*write_registry)(const char* key, const char* value);
+//     void (*write_log)(const char* message);
+//     bool (*file_exists)(const char* path);
+//     const char* (*read_file)(const char* path);
+//     void (*write_file)(const char* path, const char* content);
+//     const char* (*get_current_user)();
+//     void (*clear_screen)();
+//     void (*set_color)(const char* color);
+//     void (*pause)();
+//     void (*delete_registry)(const char* key);
+//     bool (*dir_exists)(const char* path);
+//     void (*append_file)(const char* path, const char* content);
+//     bool (*delete_file)(const char* path);
+//     bool (*create_directory)(const char* path);
+//     void (*unregister_command)(const char* name);
+//     void (*execute_command)(const char* cmd);
+//     const char* (*get_os_name)();
+//     const char* (*get_build)();
+//     int (*get_safe_mode)();
+//     int (*shell_execute)(const char* command);
+//     const char* (*get_root_path)();
+//     const char* (*get_config_path)();
+//     const char* (*get_users_path)();
+//     const char* (*get_drivers_path)();
+//     const char* (*calculate_hash)(const char* input);
+//     bool (*user_exists)(const char* username);
+// };
+
+// typedef int (*DriverInitFunc)(ARSLANIUS_API* api);
+
+// #endif
+
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -17,16 +68,24 @@
 #include <direct.h>
 #include <io.h>
 #include <filesystem>
+#include <psapi.h>
+#include <map>
+#include <functional>
 #include "resource.h"
+#include "miniz.h"
+#include "arslanius.h"
+std::map<std::string, CommandHandler> driverCommands;
+ARSLANIUS_API g_api;
 
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "psapi.lib")
 
 using namespace std;
 
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.1.1";
+const string CURRENT_BUILD = "58.2.0";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -67,13 +126,14 @@ int diagnostic = 0;
 int lastSuccessfulMode = 0;
 int acpiRequest = 0;
 int enableLua = 1;
-int REG_VERSION_FOUND = 0;
+string REG_VERSION_FOUND = "0";
 int setup = 0;
 int system_hash_found = 0;
 int admin_hash_found = 0;
 int sudo_command = 0;
 int lockdown = 0;
 int loginAttempts = 0;
+int DriverloadOFF = 0;
 DWORD64* ptr = nullptr;
 string systemColor = "0e";
 string adminColor = "4f";
@@ -103,6 +163,9 @@ void memoryDiag();
 void logonScreen();
 void applyColor();
 void cmdLoop();
+void initAPI();
+void loadDrivers();
+void print_slow(const string& text);
 void check_AUTHORITY();
 void check_kernel();
 void check_registry();
@@ -262,15 +325,12 @@ void clearScreen() {
 	COORD coordScreen = { 0, 0 };
 	DWORD cCharsWritten;
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
-	DWORD dwConSize;
-
 	if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
-	dwConSize = csbi.dwSize.X * csbi.dwSize.Y;
-
-	FillConsoleOutputCharacter(hConsole, (TCHAR)' ', dwConSize, coordScreen, &cCharsWritten);
-
+	DWORD dwConSize = (csbi.srWindow.Right - csbi.srWindow.Left + 1) *
+		(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
 	FillConsoleOutputAttribute(hConsole, csbi.wAttributes, dwConSize, coordScreen, &cCharsWritten);
-
+	WriteConsoleOutputCharacterA(hConsole, "", 0, coordScreen, &cCharsWritten);
+	FillConsoleOutputCharacter(hConsole, (TCHAR)' ', dwConSize, coordScreen, &cCharsWritten);
 	SetConsoleCursorPosition(hConsole, coordScreen);
 }
 
@@ -304,11 +364,21 @@ void loadBCD() {
 			if (key == "BOOT_TIMEOUT") bootTimeout = stoi(value);
 			else if (key == "DEFAULT_MODE") defaultMode = stoi(value);
 			else if (key == "LAST_SUCCESSFUL_MODE") lastSuccessfulMode = stoi(value);
+			else if (key == "DRIVER_LOAD_OFF") DriverloadOFF = stoi(value);
 		}
 		catch (...) {
 			continue;
 		}
 	}
+}
+
+void print_slow(const string& text) {
+	timeBeginPeriod(1);
+	for (char c : text) {
+		std::cout << c << std::flush;
+		Sleep(2);
+	}
+	timeEndPeriod(1);
 }
 
 void installapp(const string& app_id) {
@@ -418,6 +488,7 @@ void check_BCD() {
 	vector<string> linesToFind = {
 		"BOOT_TIMEOUT=",
 		"DEFAULT_MODE=",
+		"DRIVER_LOAD_OFF="
 	};
 	string content = readFile(configRoot + "\\BCD");
 	string lowerContent = content;
@@ -463,7 +534,8 @@ void loadRegistry() {
 			else if (key == "SYSTEM_COLOR") systemColor = stoi(value);
 			else if (key == "ADMIN_COLOR") adminColor = stoi(value);
 			else if (key == "USER_COLOR") userColor = stoi(value);
-			else if (key == "REG_VERSION") REG_VERSION_FOUND = stoi(value);
+			else if (key == "LOGOUT_TIMEOUT") logoutTimeout = stoi(value);
+			else if (key == "REG_VERSION") REG_VERSION_FOUND = value;
 			else if (key == "SETUP") setup = stoi(value);
 		}
 		catch (...) {
@@ -472,6 +544,203 @@ void loadRegistry() {
 	}
 }
 
+void register_driver_command(const char* name, CommandHandler handler) {
+	string cmd_name = name;
+	transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::tolower);
+	driverCommands[cmd_name] = handler;
+}
+
+void initAPI() {
+	g_api.register_command = register_driver_command;
+	g_api.print = [](const char* text) { std::cout << text; };
+	g_api.print_slow = [](const char* text) { print_slow(text); };
+	g_api.read_registry = [](const char* key) -> const char* {
+		static std::string value;
+		std::string content = readFile(regPath);
+		std::istringstream iss(content);
+		std::string line;
+		while (std::getline(iss, line)) {
+			size_t eq = line.find('=');
+			if (eq != std::string::npos) {
+				std::string k = trim(line.substr(0, eq));
+				if (k == key) {
+					value = trim(line.substr(eq + 1));
+					return value.c_str();
+				}
+			}
+		}
+		value = "";
+		return value.c_str();
+	};
+	g_api.write_registry = [](const char* key, const char* value) {
+		std::string content = readFile(regPath);
+		std::istringstream iss(content);
+		std::string line, newContent;
+		bool found = false;
+		while (std::getline(iss, line)) {
+			size_t eq = line.find('=');
+			if (eq != std::string::npos) {
+				std::string k = trim(line.substr(0, eq));
+				if (k == key) {
+					newContent += std::string(key) + "=" + value + "\n";
+					found = true;
+				}
+				else {
+					newContent += line + "\n";
+				}
+			}
+			else {
+				newContent += line + "\n";
+			}
+		}
+		if (!found) {
+			newContent += std::string(key) + "=" + value + "\n";
+		}
+		writeFile(regPath, newContent);
+	};
+	g_api.write_log = [](const char* message) { writeLog(message); };
+	g_api.file_exists = [](const char* path) -> bool { return fileExists(path); };
+	g_api.read_file = [](const char* path) -> const char* {
+		static std::string content;
+		content = readFile(path);
+		return content.c_str();
+	};
+	g_api.write_file = [](const char* path, const char* content) {
+		writeFile(path, content);
+	};
+	g_api.get_current_user = []() -> const char* {
+		static std::string user;
+		user = currentUser;
+		return user.c_str();
+	};
+	g_api.clear_screen = []() { clearScreen(); };
+	g_api.set_color = [](const char* color) { setColor(color); };
+	g_api.pause = []() { pause(); };
+	g_api.delete_registry = [](const char* key) {
+		string content = readFile(regPath);
+		istringstream iss(content);
+		string line, newContent;
+		while (getline(iss, line)) {
+			size_t eq = line.find('=');
+			if (eq != string::npos && trim(line.substr(0, eq)) == key) continue;
+			newContent += line + "\n";
+		}
+		writeFile(regPath, newContent);
+	};
+	g_api.dir_exists = [](const char* path) -> bool { return dirExists(path); };
+	g_api.append_file = [](const char* path, const char* content) { appendFile(path, content); };
+	g_api.delete_file = [](const char* path) -> bool { return DeleteFileA(path); };
+	g_api.create_directory = [](const char* path) -> bool { return CreateDirectoryA(path, NULL); };
+	g_api.unregister_command = [](const char* name) {
+		string cmd_name = name;
+		transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::tolower);
+		driverCommands.erase(cmd_name);
+	};
+	g_api.execute_command = [](const char* cmd) { core(string(cmd)); };
+	g_api.get_os_name = []() -> const char* { return osName.c_str(); };
+	g_api.get_build = []() -> const char* { return currentBuild.c_str(); };
+	g_api.get_safe_mode = []() -> int { return safeMode; };
+	g_api.shell_execute = [](const char* cmd) -> int { return system(cmd); };
+	g_api.get_root_path = []() -> const char* { return rootPath.c_str(); };
+	g_api.get_config_path = []() -> const char* { return configRoot.c_str(); };
+	g_api.get_users_path = []() -> const char* { return usersRoot.c_str(); };
+	g_api.get_drivers_path = []() -> const char* {
+		static string dp = configRoot + "\\Drivers";
+		return dp.c_str();
+	};
+	g_api.calculate_hash = [](const char* input) -> const char* {
+		static string hash;
+		hash = calculateHash(input);
+		return hash.c_str();
+	};
+	g_api.user_exists = [](const char* username) -> bool {
+		string k = readFile(kernelPath);
+		string u = username;
+		return k.find(u + " =") != string::npos || k.find(u + "=") != string::npos;
+	};
+}
+
+void loadDrivers() {
+	string driversRoot = configRoot + "\\Drivers";
+	if (!dirExists(driversRoot)) {
+		fs::create_directories(driversRoot);
+		return;
+	}
+
+	driverCommands.clear();
+	HMODULE hMods[1024];
+	DWORD cbNeeded;
+	if (EnumProcessModules(GetCurrentProcess(), hMods, sizeof(hMods), &cbNeeded)) {
+		for (unsigned int i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
+			char modName[MAX_PATH];
+			if (GetModuleFileNameA(hMods[i], modName, sizeof(modName))) {
+				string name = modName;
+				if (name.find(".asd") != string::npos) {
+					FreeLibrary(hMods[i]);
+				}
+			}
+		}
+	}
+	WIN32_FIND_DATAA fd;
+	string searchPath = driversRoot + "\\*.asd";
+	HANDLE hFind = FindFirstFileA(searchPath.c_str(), &fd);
+
+	if (hFind == INVALID_HANDLE_VALUE) {
+		return;
+	}
+
+	cout << endl << "[ BOOT MANAGER ] Loading drivers..." << endl;
+
+	int loaded = 0, failed = 0;
+
+	do {
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+			string driverPath = driversRoot + "\\" + fd.cFileName;
+
+			HMODULE hMod = LoadLibraryA(driverPath.c_str());
+			if (!hMod) {
+				DWORD err = GetLastError();
+				cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (LoadLibrary error: " << err << ")" << endl;
+				failed++;
+				continue;
+			}
+
+			DriverInitFunc init = (DriverInitFunc)GetProcAddress(hMod, "asd_init");
+			if (!init) {
+				DWORD err = GetLastError();
+				cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (No asd_init, error: " << err << ")" << endl;
+				FreeLibrary(hMod);
+				failed++;
+				continue;
+			}
+
+			cout << "[ DRIVER ] " << fd.cFileName << "..." << endl;
+			int result = init(&g_api);
+
+			if (result == BAROS_SUCCESS) {
+				loaded++;
+			}
+			else if (result == BAROS_CRITICAL) {
+				cout << "FAILED (BAROSSTATUS: CRITICAL)" << endl;
+				FreeLibrary(hMod);
+				failed++;
+				pause();
+				bsod("15");
+			}
+			else {
+				cout << "FAILED (Init returned: " << result << ")" << endl;
+				FreeLibrary(hMod);
+				failed++;
+			}
+		}
+	} while (FindNextFileA(hFind, &fd));
+
+	FindClose(hFind);
+
+	cout << "[ BOOT MANAGER ] Drivers: " << loaded
+		<< " loaded, " << failed << " failed" << endl;
+	pause();
+}
 
 void saveBCD() {
 	string bcdPath = configRoot + "\\BCD";
@@ -479,6 +748,7 @@ void saveBCD() {
 	ss << "BOOT_TIMEOUT=" << bootTimeout << endl;
 	ss << "DEFAULT_MODE=" << defaultMode << endl;
 	ss << "LAST_SUCCESSFUL_MODE=" << lastSuccessfulMode << endl;
+	ss << "DRIVER_LOAD_OFF=" << DriverloadOFF << endl;
 	ss << "BOOT_COUNT=0" << endl;
 	ss << "LAST_BOOT_SUCCESS=" << getCurrentDateTime() << endl;
 	writeFile(bcdPath, ss.str());
@@ -565,325 +835,500 @@ void bsod(const string& code) {
 
 	if (code == "1a") {
 		setColor("17");
-		cout << "*** STOP: 0x00000001a [0xc00000001a, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000001a [0xc00000001a, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files" << endl;
 		cout << endl;
-		cout << "CONFIG_ROOT_NOT_FOUND - The config root is missing." << endl;
-		cout << "Please reinstall or run Startup Repair." << endl;
+		print_slow("*** File: \\Settings And System Files");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("CONFIG_ROOT_NOT_FOUND - The config root is missing.");
+		cout << endl;
+		print_slow("Please reinstall or run Startup Repair.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "1") {
 		setColor("17");
-		cout << "*** STOP: 0x00000001 [0xc00000001, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000001 [0xc00000001, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "KERNEL_NOT_FOUND - The kernel.dll is missing." << endl;
-		cout << "Please reinstall or run Startup Repair." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("KERNEL_NOT_FOUND - The kernel.dll is missing.");
+		cout << endl;
+		print_slow("Please reinstall or run Startup Repair.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "2") {
 		setColor("17");
-		cout << "*** STOP: 0x00000002 [0xc00000002, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000002 [0xc00000002, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "SYSTEM_ACCOUNT_HASH_MISMATCH - Someone's been playing with kernel.dll in Notepad, huh?" << endl;
-		cout << "Please reinstall or run Startup Repair." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Expected system hash: " << EXPECTED_SYSTEM_HASH << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("SYSTEM_ACCOUNT_HASH_MISMATCH - Someone's been playing with kernel.dll in Notepad, huh?");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("Please reinstall or run Startup Repair.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Expected system hash: " + EXPECTED_SYSTEM_HASH);
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "3") {
 		setColor("17");
-		cout << "*** STOP: 0x00000003 [0xc00000003, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000003 [0xc00000003, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
 		cout << endl;
-		cout << "REGISTRY_VERSION_MISMATCH - The version specified in the REG.cfg file is incorrect." << endl;
-		cout << "Please update it to continue working." << endl;
+		print_slow("*** File: \\Settings And System Files\\REG.cfg");
 		cout << endl;
-		cout << "Expected version: " << REG_VERSION << endl;
-		cout << "Found version: " << REG_VERSION_FOUND << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("REGISTRY_VERSION_MISMATCH - The version specified in the REG.cfg file is incorrect.");
+		cout << endl;
+		print_slow("Please update it to continue working.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Expected version: " + REG_VERSION);
+		cout << endl;
+		print_slow("*** Found version: " + REG_VERSION_FOUND);
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "4") {
 		setColor("17");
-		cout << "*** STOP: 0x00000004 [0xc00000004, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000004 [0xc00000004, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
 		cout << endl;
-		cout << "REGISTRY_NOT_FOUND - The REG.cfg is missing." << endl;
-		cout << "Please reinstall or run Startup Repair." << endl;
+		print_slow("*** File: \\Settings And System Files\\REG.cfg");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("REGISTRY_NOT_FOUND - The REG.cfg is missing.");
+		cout << endl;
+		print_slow("Please reinstall or run Startup Repair.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "5") {
 		setColor("04");
-		cout << "*** STOP: 0x00000005 [0xc00000005, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000005 [0xc00000005, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "RESERVED_USERNAME_DETECTED - Security violation!" << endl;
-		cout << "Someone tried to create 'BarOS AUTHORITY' in kernel.dll." << endl;
-		cout << "That's like printing your own \"100% REAL OFFICIAL\" dollar bill." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Reserved username found in kernel space." << endl;
-		cout << "*** System halted to prevent unauthorized access." << endl;
 		cout << endl;
-		cout << "If you call a support specialist, tell him this information so that he can laugh." << endl;
+		print_slow("RESERVED_USERNAME_DETECTED - Security violation!");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("Someone tried to create 'BarOS AUTHORITY' in kernel.dll.");
+		cout << endl;
+		print_slow("That's like printing your own \"100% REAL OFFICIAL\" dollar bill.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Reserved username found in kernel space.");
+		cout << endl;
+		print_slow("*** System halted to prevent unauthorized access.");
+		cout << endl;
+		cout << endl;
+		print_slow("If you call a support specialist, tell him this information so that he can laugh.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "6") {
 		setColor("17");
-		cout << "*** STOP: 0x00000006 [0xc00000006, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000006 [0xc00000006, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "ADMIN_ACCOUNT_HASH_MISMATCH - Someone tried to give themselves admin privileges the hard way." << endl;
-		cout << "The ADMINISTRATOR hash doesn't match. Spoiler: it didn't work." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Expected admin hash: " << EXPECTED_ADMIN_HASH << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("ADMIN_ACCOUNT_HASH_MISMATCH - Someone tried to give themselves admin privileges the hard way.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("The ADMINISTRATOR hash doesn't match. Spoiler: it didn't work.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Expected admin hash: " + EXPECTED_ADMIN_HASH);
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "7") {
 		setColor("17");
-		cout << "*** STOP: 0x00000007 [0xc00000007, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000007 [0xc00000007, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
 		cout << endl;
-		cout << "BAD_SYSTEM_CONFIG_INFO - The registry is missing required entries." << endl;
-		cout << "OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR, ENABLE_LUA, or REG_VERSION" << endl;
-		cout << "is missing. Run Startup Repair to restore the registry." << endl;
+		print_slow("*** File: \\Settings And System Files\\REG.cfg");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Registry file found but incomplete." << endl;
-		cout << "*** Expected entries: OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR," << endl;
-		cout << "*** ENABLE_LUA, REG_VERSION" << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("BAD_SYSTEM_CONFIG_INFO - The registry is missing required entries.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR, ENABLE_LUA, or REG_VERSION");
+		cout << endl;
+		print_slow("is missing. Run Startup Repair to restore the registry.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Registry file found but incomplete.");
+		cout << endl;
+		print_slow("*** Expected entries: OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR,");
+		cout << endl;
+		print_slow("*** ENABLE_LUA, REG_VERSION");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "8") {
 		setColor("17");
-		cout << "*** STOP: 0x00000008 [0xc00000008, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000008 [0xc00000008, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "KERNEL_INCOMPLETE - The kernel is missing required SYSTEM or ADMINISTRATOR entries." << endl;
-		cout << "Someone deleted important lines from kernel.dll. Probably with Notepad." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Missing: SYSTEM or SYSTEM ADMINISTRATOR account" << endl;
-		cout << "*** Kernel file found but incomplete." << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("KERNEL_INCOMPLETE - The kernel is missing required SYSTEM or ADMINISTRATOR entries.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("Someone deleted important lines from kernel.dll. Probably with Notepad.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Missing: SYSTEM or SYSTEM ADMINISTRATOR account");
+		cout << endl;
+		print_slow("*** Kernel file found but incomplete.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "9") {
 		setColor("17");
-		cout << "*** STOP: 0x00000009 [0xc00000009, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000009 [0xc00000009, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\ARSLANIUS 28.exe" << endl;
 		cout << endl;
-		cout << "LOGON_ATTACK_DETECTED - Too many failed login attempts." << endl;
-		cout << "A brute force attack may be in progress." << endl;
+		print_slow("*** File: \\ARSLANIUS 28.exe");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Failed attempts: 10" << endl;
-		cout << "*** System halted to prevent unauthorized access." << endl;
-		cout << "*** Run Recovery Environment to investigate." << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("LOGON_ATTACK_DETECTED - Too many failed login attempts.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("A brute force attack may be in progress.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Failed attempts: 10");
+		cout << endl;
+		print_slow("*** System halted to prevent unauthorized access.");
+		cout << endl;
+		print_slow("*** Run Recovery Environment to investigate.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "10") {
 		setColor("17");
-		cout << "*** STOP: 0x00000010 [0xc00000010, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000010 [0xc00000010, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\kernel.dll" << endl;
 		cout << endl;
-		cout << "The kernel is full, run startup repair to reset it." << endl;
-		cout << "Looks like someone needed TOO many accounts." << endl;
-		cout << "Run Startup Repair to restore kernel." << endl;
+		print_slow("*** File: \\Settings And System Files\\kernel.dll");
 		cout << endl;
-		cout << "Technical information:" << endl;
+		cout << endl;
+		print_slow("The kernel is full, run startup repair to reset it.");
+		cout << endl;
+		print_slow("Looks like someone needed TOO many accounts.");
+		cout << endl;
+		print_slow("Run Startup Repair to restore kernel.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
 		std::cout << "*** Size: " << *ptr << " bytes" << std::endl;
 		delete ptr;
-		cout << "*** Kernel file found but locked." << endl;
+		print_slow("*** Kernel file found but locked.");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "11") {
 		setColor("17");
-		cout << "*** STOP: 0x00000011 [0xc00000011, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000011 [0xc00000011, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\REG.cfg" << endl;
 		cout << endl;
-		cout << "The registry is full, run startup repair to reset it." << endl;
-		cout << "Looks like someone filled the registry with all sorts of junk, huh?" << endl;
-		cout << "Run Startup Repair to restore registry." << endl;
+		print_slow("*** File: \\Settings And System Files\\REG.cfg");
 		cout << endl;
-		cout << "Technical information:" << endl;
+		cout << endl;
+		print_slow("The registry is full, run startup repair to reset it.");
+		cout << endl;
+		print_slow("Looks like someone filled the registry with all sorts of junk, huh?");
+		cout << endl;
+		print_slow("Run Startup Repair to restore registry.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
 		std::cout << "*** Size: " << *ptr << " bytes" << std::endl;
 		delete ptr;
-		cout << "*** REG file found but locked." << endl;
+		print_slow("*** REG file found but locked.");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "12") {
 		setColor("17");
-		cout << "*** STOP: 0x00000012 [0xc00000012, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000012 [0xc00000012, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\system.log" << endl;
 		cout << endl;
-		cout << "LOG_OVERFLOW - The system log is full of shit." << endl;
-		cout << "Someone's been writing a novel in system.log." << endl;
-		cout << "150 KB is the limit. Run Startup Repair to clear the log." << endl;
+		print_slow("*** File: \\Settings And System Files\\system.log");
 		cout << endl;
-		cout << "Technical information:" << endl;
+		cout << endl;
+		print_slow("LOG_OVERFLOW - The system log is full of shit.");
+		cout << endl;
+		print_slow("Someone's been writing a novel in system.log.");
+		cout << endl;
+		print_slow("150 KB is the limit. Run Startup Repair to clear the log.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
 		std::cout << "*** Size: " << *ptr << " bytes" << std::endl;
 		delete ptr;
-		cout << "*** Log file found but locked due to size limit." << endl;
+		print_slow("*** Log file found but locked due to size limit.");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "13") {
 		setColor("17");
-		cout << "*** STOP: 0x00000013 [0xc00000013, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000013 [0xc00000013, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\BCD" << endl;
 		cout << endl;
-		cout << "BCD_CORRUPTED - The BCD is missing required entries." << endl;
-		cout << "DEFAULT_MODE or BOOT_TIMEOUT is missing." << endl;
-		cout << "Run Startup Repair to restore the BCD." << endl;
+		print_slow("*** File: \\Settings And System Files\\BCD");
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** BCD file found but incomplete." << endl;
-		cout << "*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE" << endl;
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
+		print_slow("BCD_CORRUPTED - The BCD is missing required entries.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("DEFAULT_MODE, BOOT_TIMEOUT or DRIVER_LOAD_OFF is missing.");
+		cout << endl;
+		print_slow("Run Startup Repair to restore the BCD.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** BCD file found but incomplete.");
+		cout << endl;
+		print_slow("*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE, DRIVER_LOAD_OFF");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "14") {
 		setColor("17");
-		cout << "*** STOP: 0x00000014 [0xc00000014, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00000014 [0xc00000014, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\Settings And System Files\\BCD" << endl;
 		cout << endl;
-		cout << "BCD_NOT_FOUND - The BCD is missing." << endl;
-		cout << "Please reinstall or run Startup Repair." << endl;
+		print_slow("*** File: \\Settings And System Files\\BCD");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("BCD_NOT_FOUND - The BCD is missing.");
+		cout << endl;
+		print_slow("Please reinstall or run Startup Repair.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
+		pause();
+		recoveryEnv();
+	}
+	else if (code == "15") {
+		setColor("17");
+		print_slow("*** STOP: 0x00000015 [0xc00000015, 0x00000000, 0x00000000, 0x00000000]");
+		cout << endl;
+		cout << endl;
+		print_slow("*** File: \\Settings And System Files\\Drivers");
+		cout << endl;
+		cout << endl;
+		print_slow("DRIVER_CRITICAL_FAILURE - A critical driver returned BAROS_CRITICAL (2).");
+		cout << endl;
+		print_slow("Set DRIVER_LOAD_OFF=1 in BCD to disable all drivers.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		recoveryEnv();
 	}
 	else if (code == "DIED") {
 		setColor("17");
-		cout << "*** STOP: CRITICAL_PROCESS_DIED [0xc00000000, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: CRITICAL_PROCESS_DIED [0xc00000000, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "*** File: \\ARSLANIUS 28.exe" << endl;
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** ArsLogon died" << endl;
+		print_slow("*** File: \\ARSLANIUS 28.exe");
 		cout << endl;
-		cout << "If this is the first time you've seen this error, restart the system." << endl;
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** ArsLogon died");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		bootMenu();
 	}
 	else if (code == "666") {
 		setColor("17");
-		cout << "*** STOP: 0xDEADBEEF [0x00000666, 0x00000000, 0x00000000, 0x00000000]" << endl;
+		print_slow("*** STOP: 0xDEADBEEF [0x00000666, 0x00000000, 0x00000000, 0x00000000]");
 		cout << endl;
-		cout << "MANUAL_CRASH - You typed 'bsod' and now you're here. Surprised? You shouldn't be." << endl;
-		cout << "This error was intentionally triggered by the 'bsod' command." << endl;
-		cout << "No real damage was done. Just reboot and continue." << endl;
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** Crash initiated by user: " << currentUser << endl;
-		cout << "*** Stop code: 0xTeam_by_" << currentUser << endl;
-		cout << "*** Next time try 'help' instead. Or don't. I'm not your mom." << endl;
+		print_slow("MANUAL_CRASH - You typed 'bsod' and now you're here. Surprised? You shouldn't be.");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("This error was intentionally triggered by the 'bsod' command.");
+		cout << endl;
+		print_slow("No real damage was done. Just reboot and continue.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** Crash initiated by user: " + currentUser);
+		cout << endl;
+		print_slow("*** Stop code: 0xTeam_by_" + currentUser);
+		cout << endl;
+		print_slow("*** Next time try 'help' instead. Or don't. I'm not your mom.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		bootMenu();
 	}
 	else {
 		setColor("08");
-		cout << "*** STOP: 0x00001225a [0x00000220, 0x00000002, 0x00000000a, 0x00000000]" << endl;
+		print_slow("*** STOP: 0x00001225a [0x00000220, 0x00000002, 0x00000000a, 0x00000000]");
 		cout << endl;
-		cout << "UNKNOWN_ERROR - Something went wrong and ARSLANIUS crashed," << endl;
-		cout << "perhaps the bsod environment variable was not defined due to a serious problem," << endl;
-		cout << "replace the main ARSLANIUS file with the original one." << endl;
 		cout << endl;
-		cout << "Technical information:" << endl;
-		cout << "*** UNKNOWN_ERROR" << endl;
-		cout << "*** Stop code: 0x00001225a" << endl;
+		print_slow("UNKNOWN_ERROR - Something went wrong and ARSLANIUS crashed,");
 		cout << endl;
-		cout << "For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues" << endl;
+		print_slow("perhaps the bsod environment variable was not defined due to a serious problem,");
+		cout << endl;
+		print_slow("replace the main ARSLANIUS file with the original one.");
+		cout << endl;
+		cout << endl;
+		print_slow("Technical information:");
+		cout << endl;
+		print_slow("*** UNKNOWN_ERROR");
+		cout << endl;
+		print_slow("*** Stop code: 0x00001225a");
+		cout << endl;
+		print_slow("*** Last User: " + currentUser);
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
 		pause();
 		exit(1);
 	}
@@ -895,10 +1340,17 @@ void bsod(const string& code) {
 
 void bootMenu() {
 	if (!dirExists(configRoot)) {
+		ensureDirectories();
 		bsod("1a");
 	};
 	loadBCD();
 	loadRegistry();
+	if (DriverloadOFF != 1) {
+		clearScreen();
+		setColor("0f");
+		initAPI();
+		loadDrivers();
+	}
 	HANDLE hKernel = CreateFileA(kernelPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hKernel != INVALID_HANDLE_VALUE) {
 		LARGE_INTEGER fileSize;
@@ -1062,7 +1514,7 @@ void bootMenu() {
 			bsod("4");
 		};
 		check_registry();
-		if (REG_VERSION_FOUND != std::stoi(REG_VERSION)) {
+		if (REG_VERSION_FOUND != REG_VERSION) {
 			bsod("3");
 		}
 		check_AUTHORITY();
@@ -1111,7 +1563,7 @@ void normalBoot() {
 	}
 
 	// Boot animation
-	for (int i = 1; i <= 17; i++) {
+	for (int i = 1; i <= 20; i++) {
 		clearScreen();
 		setColor("0f");
 		cout << "======================================================================================================================" << endl;
@@ -1142,6 +1594,9 @@ void normalBoot() {
 		case 15: cout << "                                                    |            .|" << endl; break;
 		case 16: cout << "                                                    |             |" << endl; break;
 		case 17: cout << "                                                    |.            |" << endl; break;
+		case 18: cout << "                                                    |..           |" << endl; break;
+		case 19: cout << "                                                    |...          |" << endl; break;
+		case 20: cout << "                                                    | ...         |" << endl; break;
 		}
 		cout << "                                                     -------------" << endl;
 		Sleep(230);
@@ -1566,7 +2021,7 @@ void arslogon(const string& authority) {
 		cout << "                                                 6. Return" << endl;
 		cout << endl;
 		cout << endl;
-		cout << "Automatically logout after 60 seconds..." << endl;
+		cout << "Automatically logout after " << logoutTimeout << " seconds..." << endl;
 		cout << "Select option (1-6): ";
 		DWORD64 startTime = GetTickCount64();
 		bool keyPressed = false;
@@ -1802,17 +2257,17 @@ void cmdLoop() {
 					writeLog("BarOS SERVICE\\SYSPULSE: System Health OK");
 				}
 				const size_t MAX_LOG_SIZE_SYS = 10240;
-				HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-				if (hLog != INVALID_HANDLE_VALUE) {
+				HANDLE hLogF = CreateFileA(logPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+				if (hLogF != INVALID_HANDLE_VALUE) {
 					LARGE_INTEGER fileSize;
-					if (GetFileSizeEx(hLog, &fileSize)) {
+					if (GetFileSizeEx(hLogF, &fileSize)) {
 						if (fileSize.QuadPart > MAX_LOG_SIZE_SYS) {
-							CloseHandle(hLog);
+							CloseHandle(hLogF);
 							fs::remove(logPath);
 							writeLog("BarOS SERVICE\\SYSPULSE: LOG_CLEARED");
 						}
 					}
-					CloseHandle(hLog);
+					CloseHandle(hLogF);
 				}
 			}
 			if (fileExists(sysServices + "\\NetMonitor.active")) {
@@ -2010,7 +2465,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "ping", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "ping", "as-pack", "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -2018,7 +2473,7 @@ void core(const string& cmd) {
 									 "backup", "backup-restore", "lock", "events",
 									 "reboot_to_recovery", "report", "cls", "ver", "whoami",
 									 "shutdown", "reboot", "adduser", "start", "sfc",
-									 "clean", "mail-read", "mail-send", "edit", "guest",
+									 "clean", "mail-read", "mail-send", "edit", "guest-toggle",
 									 "regedit", "deluser", "msg-all", "broadcast", "alert", "restore-point",
 									 "restore" };
 		for (const string& c : adminCmds) {
@@ -2038,7 +2493,7 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		sudo_command == 0) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "as-pack", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -2169,6 +2624,69 @@ void core(const string& cmd) {
 		writeLog("ALERT_SENT: " + alertText);
 		cout << "[ OK ] Alert deployed to all users." << endl;
 	}
+	else if (ex_c == "as-pack") {
+		string zipName;
+		cout << "Enter archive name (ex: backup): ";
+		getline(cin, zipName);
+		zipName = trim(zipName);
+		if (zipName.empty()) {
+			cout << "[ ERROR ] Archive name cannot be empty." << endl;
+			return;
+		}
+		string zipPath = zipName + ".zip";
+		cout << "[ WAIT ] Packing files to " << zipPath << "..." << endl;
+		if (fs::exists(zipPath)) fs::remove(zipPath);
+		mz_zip_archive zip = {};
+		mz_zip_writer_init_file(&zip, zipPath.c_str(), 0);
+		for (const auto& entry : fs::directory_iterator(fs::current_path())) {
+			if (entry.is_regular_file()) {
+				string name = entry.path().filename().string();
+				if (name != zipPath && name != "ARSLANIUS 28.exe") {  // не пакуем архив и сам .exe
+					cout << "[ PACK ] Adding: " << name << endl;
+					string content = readFile(entry.path().string());
+					mz_zip_writer_add_mem(&zip, name.c_str(), content.c_str(), content.size(), MZ_DEFAULT_COMPRESSION);
+				}
+			}
+		}
+		mz_zip_writer_finalize_archive(&zip);
+		mz_zip_writer_end(&zip);
+		writeLog("ARCHIVE_CREATED: " + zipPath);
+		cout << "[ OK ] Archive " << zipPath << " created." << endl;
+	}
+	else if (ex_c == "as-unpack") {
+		string zipName;
+		cout << "Enter archive to unpack: ";
+		getline(cin, zipName);
+		zipName = trim(zipName);
+		if (!fileExists(zipName)) {
+			cout << "[ ERROR ] Archive not found." << endl;
+			return;
+		}
+		cout << "[ WAIT ] Extracting files..." << endl;
+		mz_zip_archive zip = {};
+		if (!mz_zip_reader_init_file(&zip, zipName.c_str(), 0)) {
+			cout << "[ ERROR ] Failed to open archive." << endl;
+			return;
+		}
+		int numFiles = mz_zip_reader_get_num_files(&zip);
+		for (int i = 0; i < numFiles; i++) {
+			mz_zip_archive_file_stat fileStat;
+			if (mz_zip_reader_file_stat(&zip, i, &fileStat)) {
+				string fileName = fileStat.m_filename;
+				cout << "[ EXTRACT ] Writing: " << fileName << endl;
+				size_t uncompSize;
+				void* data = mz_zip_reader_extract_to_heap(&zip, i, &uncompSize, 0);
+				if (data) {
+					string content((char*)data, uncompSize);
+					writeFile(fileName, content);
+					mz_free(data);
+				}
+			}
+		}
+		mz_zip_reader_end(&zip);
+		writeLog("ARCHIVE_EXTRACTED: " + zipName);
+		cout << "[ OK ] Archive extracted." << endl;
+	}
 	else if (ex_c == "arsstore") {
 		clearScreen();
 		cout << "======================================================================================================================" << endl;
@@ -2188,6 +2706,40 @@ void core(const string& cmd) {
 		else if (choice == '3') installapp("3");
 		else if (choice == '4') interfaceScreen();
 		core("arsstore");
+	}
+	else if (ex_c == "guest-toggle") {
+		cout << "Enable Guest Mode? (Y/N): ";
+		char g_act = _getch();
+		cout << g_act << endl;
+		if (toupper(g_act) == 'Y') {
+			string kernel = readFile(kernelPath);
+			if (kernel.find("GUEST =") != string::npos || kernel.find("GUEST=") != string::npos) {
+				cout << "[ ERROR ] GUEST already exists." << endl;
+				return;
+			}
+			string hash = calculateHash("GUEST");
+			appendFile(kernelPath, "GUEST = " + hash + "\n");
+			fs::create_directories(usersRoot + "\\GUEST");
+			writeLog("GUEST_ENABLED");
+			cout << "[ OK ] Guest mode ACTIVE. Login: GUEST / Pass: GUEST" << endl;
+		}
+		else {
+			string kernel = readFile(kernelPath);
+			istringstream iss(kernel);
+			string line, newKernel;
+			while (getline(iss, line)) {
+				if (line.find("GUEST =") != 0 && line.find("GUEST=") != 0) {
+					newKernel += line + "\n";
+				}
+			}
+			writeFile(kernelPath, newKernel);
+			string guestDir = usersRoot + "\\GUEST";
+			if (fs::exists(guestDir)) {
+				fs::remove_all(guestDir);
+			}
+			writeLog("GUEST_DISABLED");
+			cout << "[ OK ] Guest mode DISABLED. Profile wiped." << endl;
+		}
 	}
 	else if (ex_c == "ls") system("dir /w");
 	else if (ex_c == "cd") {
@@ -2245,6 +2797,41 @@ void core(const string& cmd) {
 			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 			cout << "[ ERROR ] Failed to create folder." << endl;
 		}
+	}
+	else if (ex_c == "report") {
+		cout << "[ WAIT ] Generating HTML Report..." << endl;
+		string reportPath = rootPath + "\\Report.html";
+		ofstream report(reportPath);
+		if (!report.is_open()) {
+			cout << "[ ERROR ] Failed to create report file." << endl;
+			return;
+		}
+		report << "<html><body style='background:#111;color:#0f0;font-family:monospace'>" << endl;
+		report << "<h1>" << osName << " - SYSTEM REPORT</h1>" << endl;
+		report << "<hr>" << endl;
+		report << "<p>Build: " << currentBuild << "</p>" << endl;
+		report << "<p>Kernel: BarOS 23.1</p>" << endl;
+		report << "<p>Active User: " << currentUser << "</p>" << endl;
+		report << "<p>Safe Mode: " << safeMode << "</p>" << endl;
+		report << "<h2>Registered Users:</h2><pre>" << endl;
+		report << readFile(kernelPath) << endl;
+		report << "</pre>" << endl;
+		report << "<h2>System Log (last 50 lines):</h2><pre>" << endl;
+		string log = readFile(logPath);
+		istringstream iss(log);
+		string line;
+		vector<string> lines;
+		while (getline(iss, line)) lines.push_back(line);
+		int start = max(0, (int)lines.size() - 50);
+		for (int i = start; i < (int)lines.size(); i++) {
+			report << lines[i] << endl;
+		}
+		report << "</pre></body></html>" << endl;
+		report.close();
+		writeLog("REPORT_GENERATED");
+		cout << "[ OK ] Report generated: " << reportPath << endl;
+		string cmd = "start \"\" \"" + reportPath + "\"";
+		system(cmd.c_str());
 	}
 	else if (ex_c == "touch") {
 		string touchFile;
@@ -2768,7 +3355,13 @@ void core(const string& cmd) {
 		system("nslookup");
 	}
 	else {
-		cout << "\"" << ex_c << "\" is not recognized." << endl;
+		auto it = driverCommands.find(ex_c);
+		if (it != driverCommands.end()) {
+			it->second(rest);
+		}
+		else {
+			std::cout << "\"" << ex_c << "\" is not recognized." << std::endl;
+		}
 	}
 }
 
@@ -2801,12 +3394,11 @@ void rebootScreen() {
 // =====================================================================
 
 int main() {
-	SetConsoleTitleA("ARSLANIUS 28 Beta 2");
+	SetConsoleTitleA("ARSLANIUS 28 RC");
 
 	SetConsoleWidthOnly(120);
 
 	initPaths();
-	ensureDirectories();
 
 	bootMenu();
 
