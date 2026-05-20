@@ -41,6 +41,7 @@ struct ARSLANIUS_API {
     const char* (*get_config_path)();
     const char* (*get_users_path)();
     const char* (*get_drivers_path)();
+    const char* (*get_driver_home)(const char* driver_name);
     const char* (*calculate_hash)(const char* input);
     bool (*user_exists)(const char* username);
 };

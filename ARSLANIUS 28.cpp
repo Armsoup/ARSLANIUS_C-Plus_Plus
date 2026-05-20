@@ -594,8 +594,17 @@ void initAPI() {
 	g_api.get_config_path = []() -> const char* { return configRoot.c_str(); };
 	g_api.get_users_path = []() -> const char* { return usersRoot.c_str(); };
 	g_api.get_drivers_path = []() -> const char* {
-		static string dp = configRoot + "\\Drivers";
+		static string dp = configRoot + "\\ServiceDriverRoot";
 		return dp.c_str();
+	};
+	g_api.get_driver_home = [](const char* driver_name) -> const char* {
+		static string home;
+		home = configRoot + "\\ServiceDriverRoot\\" + driver_name;
+		if (!dirExists(home)) {
+			fs::create_directories(home);
+			fs::create_directories(home + "\\logs");
+		}
+		return home.c_str();
 	};
 	g_api.calculate_hash = [](const char* input) -> const char* {
 		static string hash;
