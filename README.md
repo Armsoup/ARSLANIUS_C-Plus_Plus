@@ -16,7 +16,7 @@ Features
 
 • Boot menu with Safe Mode, Diagnostic Mode and manual
 
-• Boot animation (17-frame loading bar)
+• Boot animation (20-frame loading bar)
 
 • User accounts: SYSTEM, SYSTEM ADMINISTRATOR, GUEST, and custom users
 
