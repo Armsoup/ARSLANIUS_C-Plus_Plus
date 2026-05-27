@@ -3757,7 +3757,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 }
 
 int main(int argc, char* argv[]) {
-	SetConsoleTitleA("ARSLANIUS 28 RC2");
+	SetConsoleTitleA("ARSLANIUS 28");
 
 	SetConsoleWidthOnly(120);
 
