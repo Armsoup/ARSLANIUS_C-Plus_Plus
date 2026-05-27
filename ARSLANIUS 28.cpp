@@ -34,7 +34,7 @@ using namespace std;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "58.2.0";
+const string CURRENT_BUILD = "58.2.1";
 const string REG_VERSION = "28";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -49,6 +49,7 @@ const size_t MAX_LOG_SIZE = 153600;
 // =====================================================================
 // GLOBAL VARIABLES
 // =====================================================================
+string VersionBarOSkrnl;
 string rootPath;
 string configRoot;
 string kernelPath;
@@ -60,7 +61,7 @@ string regPath;
 string logPath;
 string restoreRoot;
 
-string currentUser = "SYSTEM";
+string currentUser;
 string userHome;
 string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
@@ -69,12 +70,14 @@ DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
 DWORD64 logoutTimeout = 60;
 int defaultMode = DEFAULT_MODE_DEFAULT;
 int bootChoice = 0;
+int requestFromResume = 0;
 int safeMode = 0;
 int rec = 0;
 int diagnostic = 0;
 int lastSuccessfulMode = 0;
 int acpiRequest = 0;
 int enableLua = 1;
+int fastBoot = 1;
 string REG_VERSION_FOUND = "0";
 int setup = 0;
 int system_hash_found = 0;
@@ -87,6 +90,8 @@ DWORD64* ptr = nullptr;
 string systemColor = "0e";
 string adminColor = "4f";
 string userColor = "1f";
+string t_c;
+string ex_c;
 string recoveryRequest = "0";
 string p_in;
 string failFile;
@@ -97,7 +102,7 @@ string regKey = "SYSTEM_COLOR";
 // =====================================================================
 // FORWARD DECLARATIONS
 // =====================================================================
-void initPaths();
+void BarOSkrnl(string_view Kernel_mode);
 void loadBCD();
 void saveBCD();
 void bootMenu();
@@ -112,8 +117,6 @@ void memoryDiag();
 void logonScreen();
 void applyColor();
 void cmdLoop();
-void initAPI();
-void loadDrivers();
 void print_slow(const string& text);
 void check_AUTHORITY();
 void check_kernel();
@@ -144,26 +147,6 @@ namespace fs = std::filesystem;
 // =====================================================================
 // IMPLEMENTATION: UTILITY FUNCTIONS
 // =====================================================================
-
-void initPaths() {
-	char buffer[MAX_PATH];
-	GetModuleFileNameA(NULL, buffer, MAX_PATH);
-	string exePath = buffer;
-	size_t lastSlash = exePath.find_last_of("\\/");
-	rootPath = exePath.substr(0, lastSlash);
-
-	configRoot = rootPath + "\\Settings And System Files";
-	kernelPath = configRoot + "\\kernel.dll";
-	usersRoot = rootPath + "\\Users";
-	programsRoot = rootPath + "\\Programs";
-	sysProf = configRoot + "\\systemprofile";
-	sysServices = sysProf;
-	regPath = configRoot + "\\REG.cfg";
-	logPath = configRoot + "\\system.log";
-	restoreRoot = rootPath + "\\RestorePoints";
-
-	userHome = sysProf;
-}
 
 string trim(const string& s) {
 	size_t start = s.find_first_not_of(" \t\r\n");
@@ -246,7 +229,9 @@ string calculateHash(const string& input) {
 		else if (c == '_') code = 63;
 		else if (c == '-') code = 64;
 		else if (c == '?') code = 65;
-		else code = 66;
+		else if (c == '!') code = 66;
+		else if (c == '@') code = 67;
+		else code = 68;
 
 		hashVal = hashVal * 31 + code + salt;
 		hashVal = hashVal % 1000000000;
@@ -313,6 +298,7 @@ void loadBCD() {
 			if (key == "BOOT_TIMEOUT") bootTimeout = stoi(value);
 			else if (key == "DEFAULT_MODE") defaultMode = stoi(value);
 			else if (key == "LAST_SUCCESSFUL_MODE") lastSuccessfulMode = stoi(value);
+			else if (key == "FAST_BOOT") fastBoot = stoi(value);
 			else if (key == "DRIVER_LOAD_OFF") DriverloadOFF = stoi(value);
 		}
 		catch (...) {
@@ -437,6 +423,7 @@ void check_BCD() {
 	vector<string> linesToFind = {
 		"BOOT_TIMEOUT=",
 		"DEFAULT_MODE=",
+		"FAST_BOOT=",
 		"DRIVER_LOAD_OFF="
 	};
 	string content = readFile(configRoot + "\\BCD");
@@ -480,9 +467,9 @@ void loadRegistry() {
 			if (key == "OS_NAME") osName = value;
 			else if (key == "ENABLE_LUA") enableLua = stoi(value);
 			else if (key == "LOCKDOWN") lockdown = stoi(value);
-			else if (key == "SYSTEM_COLOR") systemColor = stoi(value);
-			else if (key == "ADMIN_COLOR") adminColor = stoi(value);
-			else if (key == "USER_COLOR") userColor = stoi(value);
+			else if (key == "SYSTEM_COLOR") systemColor = value;
+			else if (key == "ADMIN_COLOR") adminColor = value;
+			else if (key == "USER_COLOR") userColor = value;
 			else if (key == "LOGOUT_TIMEOUT") logoutTimeout = stoi(value);
 			else if (key == "REG_VERSION") REG_VERSION_FOUND = value;
 			else if (key == "SETUP") setup = stoi(value);
@@ -499,212 +486,12 @@ void register_driver_command(const char* name, CommandHandler handler) {
 	driverCommands[cmd_name] = handler;
 }
 
-void initAPI() {
-	g_api.register_command = register_driver_command;
-	g_api.print = [](const char* text) { std::cout << text; };
-	g_api.print_slow = [](const char* text) { print_slow(text); };
-	g_api.read_registry = [](const char* key) -> const char* {
-		static std::string value;
-		std::string content = readFile(regPath);
-		std::istringstream iss(content);
-		std::string line;
-		while (std::getline(iss, line)) {
-			size_t eq = line.find('=');
-			if (eq != std::string::npos) {
-				std::string k = trim(line.substr(0, eq));
-				if (k == key) {
-					value = trim(line.substr(eq + 1));
-					return value.c_str();
-				}
-			}
-		}
-		value = "";
-		return value.c_str();
-	};
-	g_api.write_registry = [](const char* key, const char* value) {
-		std::string content = readFile(regPath);
-		std::istringstream iss(content);
-		std::string line, newContent;
-		bool found = false;
-		while (std::getline(iss, line)) {
-			size_t eq = line.find('=');
-			if (eq != std::string::npos) {
-				std::string k = trim(line.substr(0, eq));
-				if (k == key) {
-					newContent += std::string(key) + "=" + value + "\n";
-					found = true;
-				}
-				else {
-					newContent += line + "\n";
-				}
-			}
-			else {
-				newContent += line + "\n";
-			}
-		}
-		if (!found) {
-			newContent += std::string(key) + "=" + value + "\n";
-		}
-		writeFile(regPath, newContent);
-	};
-	g_api.write_log = [](const char* message) { writeLog(message); };
-	g_api.file_exists = [](const char* path) -> bool { return fileExists(path); };
-	g_api.read_file = [](const char* path) -> const char* {
-		static std::string content;
-		content = readFile(path);
-		return content.c_str();
-	};
-	g_api.write_file = [](const char* path, const char* content) {
-		writeFile(path, content);
-	};
-	g_api.get_current_user = []() -> const char* {
-		static std::string user;
-		user = currentUser;
-		return user.c_str();
-	};
-	g_api.clear_screen = []() { clearScreen(); };
-	g_api.set_color = [](const char* color) { setColor(color); };
-	g_api.pause = []() { pause(); };
-	g_api.delete_registry = [](const char* key) {
-		string content = readFile(regPath);
-		istringstream iss(content);
-		string line, newContent;
-		while (getline(iss, line)) {
-			size_t eq = line.find('=');
-			if (eq != string::npos && trim(line.substr(0, eq)) == key) continue;
-			newContent += line + "\n";
-		}
-		writeFile(regPath, newContent);
-	};
-	g_api.dir_exists = [](const char* path) -> bool { return dirExists(path); };
-	g_api.append_file = [](const char* path, const char* content) { appendFile(path, content); };
-	g_api.delete_file = [](const char* path) -> bool { return DeleteFileA(path); };
-	g_api.create_directory = [](const char* path) -> bool { return CreateDirectoryA(path, NULL); };
-	g_api.unregister_command = [](const char* name) {
-		string cmd_name = name;
-		transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::tolower);
-		driverCommands.erase(cmd_name);
-	};
-	g_api.execute_command = [](const char* cmd) { core(string(cmd)); };
-	g_api.get_os_name = []() -> const char* { return osName.c_str(); };
-	g_api.get_build = []() -> const char* { return currentBuild.c_str(); };
-	g_api.get_safe_mode = []() -> int { return safeMode; };
-	g_api.shell_execute = [](const char* cmd) -> int { return system(cmd); };
-	g_api.get_root_path = []() -> const char* { return rootPath.c_str(); };
-	g_api.get_config_path = []() -> const char* { return configRoot.c_str(); };
-	g_api.get_users_path = []() -> const char* { return usersRoot.c_str(); };
-	g_api.get_drivers_path = []() -> const char* {
-		static string dp = configRoot + "\\ServiceDriverRoot";
-		return dp.c_str();
-	};
-	g_api.get_driver_home = [](const char* driver_name) -> const char* {
-		static string home;
-		home = configRoot + "\\ServiceDriverRoot\\" + driver_name;
-		if (!dirExists(home)) {
-			fs::create_directories(home);
-			fs::create_directories(home + "\\logs");
-		}
-		return home.c_str();
-	};
-	g_api.calculate_hash = [](const char* input) -> const char* {
-		static string hash;
-		hash = calculateHash(input);
-		return hash.c_str();
-	};
-	g_api.user_exists = [](const char* username) -> bool {
-		string k = readFile(kernelPath);
-		string u = username;
-		return k.find(u + " =") != string::npos || k.find(u + "=") != string::npos;
-	};
-}
-
-void loadDrivers() {
-	string driversRoot = configRoot + "\\Drivers";
-	if (!dirExists(driversRoot)) {
-		fs::create_directories(driversRoot);
-		return;
-	}
-
-	driverCommands.clear();
-	HMODULE hMods[1024];
-	DWORD cbNeeded;
-	if (EnumProcessModules(GetCurrentProcess(), hMods, sizeof(hMods), &cbNeeded)) {
-		for (unsigned int i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
-			char modName[MAX_PATH];
-			if (GetModuleFileNameA(hMods[i], modName, sizeof(modName))) {
-				string name = modName;
-				if (name.find(".asd") != string::npos) {
-					FreeLibrary(hMods[i]);
-				}
-			}
-		}
-	}
-	WIN32_FIND_DATAA fd;
-	string searchPath = driversRoot + "\\*.asd";
-	HANDLE hFind = FindFirstFileA(searchPath.c_str(), &fd);
-
-	if (hFind == INVALID_HANDLE_VALUE) {
-		return;
-	}
-
-	cout << endl << "[ BOOT MANAGER ] Loading drivers..." << endl;
-
-	int loaded = 0, failed = 0;
-
-	do {
-		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-			string driverPath = driversRoot + "\\" + fd.cFileName;
-
-			HMODULE hMod = LoadLibraryA(driverPath.c_str());
-			if (!hMod) {
-				DWORD err = GetLastError();
-				cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (LoadLibrary error: " << err << ")" << endl;
-				failed++;
-				continue;
-			}
-
-			DriverInitFunc init = (DriverInitFunc)GetProcAddress(hMod, "asd_init");
-			if (!init) {
-				DWORD err = GetLastError();
-				cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (No asd_init, error: " << err << ")" << endl;
-				FreeLibrary(hMod);
-				failed++;
-				continue;
-			}
-
-			cout << "[ DRIVER ] " << fd.cFileName << "..." << endl;
-			int result = init(&g_api);
-
-			if (result == BAROS_SUCCESS) {
-				loaded++;
-			}
-			else if (result == BAROS_CRITICAL) {
-				cout << "FAILED (BAROSSTATUS: CRITICAL)" << endl;
-				FreeLibrary(hMod);
-				failed++;
-				pause();
-				bsod("15");
-			}
-			else {
-				cout << "FAILED (Init returned: " << result << ")" << endl;
-				FreeLibrary(hMod);
-				failed++;
-			}
-		}
-	} while (FindNextFileA(hFind, &fd));
-
-	FindClose(hFind);
-
-	cout << "[ BOOT MANAGER ] Drivers: " << loaded
-		<< " loaded, " << failed << " failed" << endl;
-	pause();
-}
-
 void saveBCD() {
 	string bcdPath = configRoot + "\\BCD";
 	stringstream ss;
 	ss << "BOOT_TIMEOUT=" << bootTimeout << endl;
 	ss << "DEFAULT_MODE=" << defaultMode << endl;
+	ss << "FAST_BOOT=" << fastBoot << endl;
 	ss << "LAST_SUCCESSFUL_MODE=" << lastSuccessfulMode << endl;
 	ss << "DRIVER_LOAD_OFF=" << DriverloadOFF << endl;
 	ss << "BOOT_COUNT=0" << endl;
@@ -729,7 +516,7 @@ void Manual() {
 	cout << "  - Auto-boot in " << bootTimeout << " seconds" << endl;
 	cout << endl;
 	cout << "[ COMMANDS ]" << endl;
-	cout << "  System: help, lock, rebootemer or arslogon -emergency reboot, cls, ver, whoami, reboot, shutdown, lockmenu [ctrl alt del]" << endl;
+	cout << "  System: help, lock, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
 	cout << "  Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
 	cout << "  Admin: adduser, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
@@ -1155,7 +942,7 @@ void bsod(const string& code) {
 		cout << endl;
 		print_slow("BCD_CORRUPTED - The BCD is missing required entries.");
 		cout << endl;
-		print_slow("DEFAULT_MODE, BOOT_TIMEOUT or DRIVER_LOAD_OFF is missing.");
+		print_slow("DEFAULT_MODE, BOOT_TIMEOUT, FAST_BOOT or DRIVER_LOAD_OFF is missing.");
 		cout << endl;
 		print_slow("Run Startup Repair to restore the BCD.");
 		cout << endl;
@@ -1164,7 +951,7 @@ void bsod(const string& code) {
 		cout << endl;
 		print_slow("*** BCD file found but incomplete.");
 		cout << endl;
-		print_slow("*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE, DRIVER_LOAD_OFF");
+		print_slow("*** Expected entries: BOOT_TIMEOUT, DEFAULT_MODE, FAST_BOOT, DRIVER_LOAD_OFF");
 		cout << endl;
 		cout << endl;
 		print_slow("If this is the first time you've seen this error, restart the system.");
@@ -1207,6 +994,27 @@ void bsod(const string& code) {
 		print_slow("DRIVER_CRITICAL_FAILURE - A critical driver returned BAROS_CRITICAL (2).");
 		cout << endl;
 		print_slow("Set DRIVER_LOAD_OFF=1 in BCD to disable all drivers.");
+		cout << endl;
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		cout << endl;
+		pause();
+		recoveryEnv();
+	}
+	else if (code == "16") {
+		setColor("04");
+		print_slow("*** STOP: 0x00000016 [0xc00000016, 0x00000000, 0x00000000, 0x00000000]");
+		cout << endl;
+		cout << endl;
+		print_slow("*** File: \\ARSLANIUS 28.exe");
+		cout << endl;
+		cout << endl;
+		print_slow("CRITICAL_KERNEL_ERROR - A serious problem has occurred and ARSLANIUS has stopped working.");
+		cout << endl;
+		print_slow("Try updating the program to the latest version or, conversely, reverting to the old one.");
 		cout << endl;
 		cout << endl;
 		print_slow("If this is the first time you've seen this error, restart the system.");
@@ -1297,56 +1105,21 @@ void bsod(const string& code) {
 // =====================================================================
 
 void bootMenu() {
-	if (!dirExists(configRoot)) {
-		ensureDirectories();
-		bsod("1a");
-	};
-	loadBCD();
-	loadRegistry();
-	if (DriverloadOFF != 1) {
+	BarOSkrnl("loading");
+	if (fileExists(configRoot + "\\hibernate.sys")) {
 		clearScreen();
 		setColor("0f");
-		initAPI();
-		loadDrivers();
-	}
-	HANDLE hKernel = CreateFileA(kernelPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hKernel != INVALID_HANDLE_VALUE) {
-		LARGE_INTEGER fileSize;
-		if (GetFileSizeEx(hKernel, &fileSize)) {
-			if (fileSize.QuadPart > MAX_KERNEL_SIZE) {
-				DWORD64 size = (DWORD64)fileSize.QuadPart;
-				CloseHandle(hKernel);
-				ptr = new DWORD64(size);
-				bsod("10");
-			}
+		cout << "Do you want to resume from hibernate.sys?" << endl;
+		cout << "Y/N: ";
+		char choice = _getch();
+		choice = tolower(choice);
+		cout << choice << endl;
+
+		switch (choice) {
+		case 'y': {
+			BarOSkrnl("resume");
 		}
-		CloseHandle(hKernel);
-	}
-	HANDLE hReg = CreateFileA(regPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hReg != INVALID_HANDLE_VALUE) {
-		LARGE_INTEGER fileSize;
-		if (GetFileSizeEx(hReg, &fileSize)) {
-			if (fileSize.QuadPart > MAX_REGISTRY_SIZE) {
-				DWORD64 size = (DWORD64)fileSize.QuadPart;
-				CloseHandle(hReg);
-				ptr = new DWORD64(size);
-				bsod("11");
-			}
 		}
-		CloseHandle(hReg);
-	}
-	HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hLog != INVALID_HANDLE_VALUE) {
-		LARGE_INTEGER fileSize;
-		if (GetFileSizeEx(hLog, &fileSize)) {
-			if (fileSize.QuadPart > MAX_LOG_SIZE) {
-				DWORD64 size = (DWORD64)fileSize.QuadPart;
-				CloseHandle(hLog);
-				ptr = new DWORD64(size);
-				bsod("12");
-			}
-		}
-		CloseHandle(hLog);
 	}
 	if (setup == 1) {
 		setColor("1f");
@@ -1530,7 +1303,7 @@ void normalBoot() {
 		cout << "                                                  Loading " << osName << endl;
 		cout << endl;
 		cout << "         Build: " << currentBuild << endl;
-		cout << "         Kernel: BarOS 23.1" << endl;
+		cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
 		cout << endl;
 		cout << "                                                     _____________" << endl;
 
@@ -1559,7 +1332,6 @@ void normalBoot() {
 		cout << "                                                     -------------" << endl;
 		Sleep(230);
 	}
-
 	logonScreen();
 }
 
@@ -1604,7 +1376,6 @@ void diagnosticMode(int mode) {
 
 	// Disable some services
 	if (mode == 1) {
-		fs::remove(sysServices + "\\SysPulse.active");
 		fs::remove(sysServices + "\\TrustedInstaller.active");
 		fs::remove(sysServices + "\\NetMonitor.active");
 		currentUser = "BarOS SERVICE\\SysPulse";
@@ -1805,86 +1576,189 @@ void logonScreen() {
 	currentUser = "SYSTEM";
 	userHome = sysProf;
 	acpiRequest = 0;
-
-	clearScreen();
-	setColor("5b");
-	cout << "======================================================================================================================" << endl;
-	cout << "                                              " << osName << " LOCK SCREEN" << endl;
-	cout << "======================================================================================================================" << endl;
-	cout << "Status: Protected / Context: " << currentUser << endl;
-	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-	cout << "COMMANDS: Shutdown, Reboot" << endl;
-	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-	cout << "Users:" << endl;
+	vector<string> users;
+	users.push_back("Shutdown");
+	users.push_back("Reboot");
+	users.push_back("Rebootemer");
 
 	if (fileExists(kernelPath)) {
 		string kernel = readFile(kernelPath);
-		cout << kernel << endl;
-	}
-
-	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-	cout << endl;
-	cout << "Username: ";
-
-	getline(cin, u_in);
-
-	if (u_in == "Shutdown" || u_in == "shutdown") {
-		writeLog("SHUTDOWN_FROM_LOGON");
-		acpiRequest = 1;
-		arslogon("logoutRequest");
-		return;
-	}
-	if (u_in == "Reboot" || u_in == "reboot") {
-		writeLog("REBOOT_FROM_LOGON");
-		acpiRequest = 2;
-		arslogon("logoutRequest");
-		return;
-	}
-	if (u_in == "arslogon -emergency reboot" || u_in == "rebootemer" || u_in == "Rebootemer") {
-		writeLog("EMERGENCY_REBOOT_FROM_LOGON");
-		arslogon("emergency_reboot");
-		return;
-	}
-
-	if (u_in.empty()) {
-		logonScreen();
-		return;
-	}
-
-	// Check login attempts
-	failFile = sysServices + "\\fail_" + u_in + ".cnt";
-	if (fileExists(failFile)) {
-		ifstream f(failFile);
-		f >> loginAttempts;
-	}
-
-	if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-		bsod("9");
-		return;
-	}
-
-	cout << "Password: ";
-	// Hide password input
-	char ch;
-	p_in = "";
-	while ((ch = _getch()) != '\r') {
-		if (ch == '\b') {
-			if (!p_in.empty()) {
-				p_in.pop_back();
-				cout << "\b \b";
+		istringstream iss(kernel);
+		string line;
+		while (getline(iss, line)) {
+			line = trim(line);
+			if (line.empty()) continue;
+			size_t eqPos = line.find('=');
+			if (eqPos != string::npos) {
+				string username = trim(line.substr(0, eqPos));
+				if (!username.empty() && username != "SYSTEM" && username != "SYSTEM ADMINISTRATOR") {
+					users.push_back(username);
+				}
 			}
 		}
+		users.insert(users.begin(), "SYSTEM ADMINISTRATOR");
+		users.insert(users.begin(), "SYSTEM");
+	}
+
+	int selected = 3;
+	if (selected >= (int)users.size()) selected = 0;
+	clearScreen();
+	setColor("5b");
+
+	cout << "======================================================================================================================" << endl;
+	cout << "                                              " << osName << " LOGON" << endl;
+	cout << "======================================================================================================================" << endl;
+	cout << "  Use UP/DOWN arrows to select, ENTER to confirm, ESC for Shutdown" << endl;
+	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+	cout << endl;
+	int listStartY = 6;
+	for (int i = 0; i < (int)users.size(); i++) {
+		cout << "    "; 
+		if (users[i] == "Shutdown") {
+			cout << "[SHUTDOWN] Turn off ARSLANIUS" << endl;
+		}
+		else if (users[i] == "Reboot") {
+			cout << "[REBOOT] Restart ARSLANIUS" << endl;
+		}
+		else if (users[i] == "Rebootemer") {
+			cout << "[EMERGENCY REBOOT] Force restart ARSLANIUS" << endl;
+		}
+		else if (users[i] == "SYSTEM") {
+			cout << "BarOS AUTHORITY\\SYSTEM (System Account)" << endl;
+		}
+		else if (users[i] == "SYSTEM ADMINISTRATOR") {
+			cout << "SYSTEM ADMINISTRATOR (Administrator)" << endl;
+		}
 		else {
-			p_in += ch;
-			cout << '*';
+			cout << users[i] << endl;
 		}
 	}
+
 	cout << endl;
-	arslogon("authorization");
+	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+	cout << "  Attempts: " << loginAttempts << " / " << MAX_LOGIN_ATTEMPTS << endl;
+	cout << "======================================================================================================================" << endl;
+
+	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	GetConsoleScreenBufferInfo(hConsole, &csbi);
+
+	auto setArrow = [&](int pos, bool active) {
+		COORD coord;
+		coord.X = 0;
+		coord.Y = listStartY + pos;
+		SetConsoleCursorPosition(hConsole, coord);
+		if (active) {
+			SetConsoleTextAttribute(hConsole, 0x5F); 
+			cout << "  > ";
+		}
+		else {
+			SetConsoleTextAttribute(hConsole, 0x5B); 
+			cout << "    ";
+		}
+		SetConsoleTextAttribute(hConsole, 0x5B);
+	};
+	setArrow(selected, true);
+
+	while (true) {
+		int key = _getch();
+
+		if (key == 224) {
+			key = _getch();
+			int oldSelected = selected;
+
+			if (key == 72) {
+				selected--;
+				if (selected < 0) selected = (int)users.size() - 1;
+			}
+			else if (key == 80) {
+				selected++;
+				if (selected >= (int)users.size()) selected = 0;
+			}
+			if (selected != oldSelected) {
+				setArrow(oldSelected, false);
+				setArrow(selected, true);
+			}
+		}
+		else if (key == 13) {  // Enter
+			u_in = users[selected];
+
+			if (u_in == "Shutdown") {
+				writeLog("SHUTDOWN_FROM_LOGON");
+				acpiRequest = 1;
+				arslogon("logoutRequest");
+				return;
+			}
+			if (u_in == "Reboot") {
+				writeLog("REBOOT_FROM_LOGON");
+				acpiRequest = 2;
+				arslogon("logoutRequest");
+				return;
+			}
+			if (u_in == "Rebootemer") {
+				writeLog("EMERGENCY_REBOOT_FROM_LOGON");
+				arslogon("emergency_reboot");
+				return;
+			}
+
+			failFile = sysServices + "\\fail_" + u_in + ".cnt";
+			if (fileExists(failFile)) {
+				ifstream f(failFile);
+				f >> loginAttempts;
+			}
+
+			if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+				bsod("9");
+				return;
+			}
+
+			COORD promptCoord;
+			promptCoord.X = 0;
+			promptCoord.Y = listStartY + (int)users.size() + 4;
+			SetConsoleCursorPosition(hConsole, promptCoord);
+
+			cout << "Password for " << u_in << ": ";
+			char ch;
+			p_in = "";
+			while ((ch = _getch()) != '\r') {
+				if (ch == '\b') {
+					if (!p_in.empty()) {
+						p_in.pop_back();
+						cout << "\b \b";
+					}
+				}
+				else {
+					p_in += ch;
+					cout << '*';
+				}
+			}
+			cout << endl;
+
+			arslogon("authorization");
+			return;
+
+		}
+		else if (key == 27) {
+			writeLog("SHUTDOWN_FROM_LOGON");
+			acpiRequest = 1;
+			arslogon("logoutRequest");
+			return;
+		}
+	}
 }
 
 void arslogon(const string& authority) {
 	if (authority == "authorization") {
+		check_AUTHORITY();
+		check_kernel();
+		string kernel_hash_check = readFile(kernelPath);
+		if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) bsod("2");
+		if (kernel_hash_check.find("SYSTEM ADMINISTRATOR = " + EXPECTED_ADMIN_HASH) == string::npos) bsod("6");
+		if (requestFromResume == 1) {
+			if (currentUser == "BarOS SERVICE\\TrustedInstaller" ||
+				currentUser == "BarOS SERVICE\\SysPulse" ||
+				currentUser == "BarOS SERVICE\\NetMonitor") interfaceScreen();
+		}
 		string kernel = readFile(kernelPath);
 		istringstream iss(kernel);
 		string line;
@@ -1893,40 +1767,59 @@ void arslogon(const string& authority) {
 
 		while (getline(iss, line)) {
 			line = trim(line);
-			if (line.find(u_in + " =") == 0 || line.find(u_in + "=") == 0) {
-				size_t eqPos = line.find('=');
-				storedHash = trim(line.substr(eqPos + 1));
-				found = true;
-				break;
+			if (requestFromResume == 0) {
+				if (line.find(u_in + " =") == 0 || line.find(u_in + "=") == 0) {
+					size_t eqPos = line.find('=');
+					storedHash = trim(line.substr(eqPos + 1));
+					found = true;
+					break;
+				}
+			}
+			else {
+				if (line.find(currentUser + " =") == 0 || line.find(currentUser + "=") == 0) {
+					size_t eqPos = line.find('=');
+					storedHash = trim(line.substr(eqPos + 1));
+					found = true;
+					break;
+				}
 			}
 		}
-
-		if (!found) {
-			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
-			cout << "[ ERROR ] User not found." << endl;
-			pause();
-			logonScreen();
-			return;
+		if (requestFromResume == 0) {
+			if (!found) {
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] User not found." << endl;
+				pause();
+				logonScreen();
+				return;
+			}
 		}
 
 		string inputHash = calculateHash(p_in);
 
 		if (inputHash == storedHash) {
 			// Success
-			fs::remove(failFile);
+			if (requestFromResume == 0) {
+				fs::remove(failFile);
 
-			currentUser = u_in;
+				currentUser = u_in;
+			}
 			if (currentUser == "SYSTEM") {
-				userHome = sysProf;
+				if (requestFromResume == 0) {
+					userHome = sysProf;
+				}
 				currentUser = "BarOS AUTHORITY\\SYSTEM";
 				regKey = "SYSTEM_COLOR";
 			}
 			else if (currentUser == "SYSTEM ADMINISTRATOR") {
-				userHome = usersRoot + "\\SYSTEM ADMINISTRATOR";
+				if (requestFromResume == 0) {
+					userHome = usersRoot + "\\SYSTEM ADMINISTRATOR";
+				}
 				regKey = "ADMIN_COLOR";
 			}
 			else {
-				userHome = usersRoot + "\\" + currentUser;
+				if (requestFromResume == 0) {
+					userHome = usersRoot + "\\" + currentUser;
+				}
 				regKey = "USER_COLOR";
 			}
 
@@ -1936,36 +1829,121 @@ void arslogon(const string& authority) {
 			if (currentUser == "Armsoup") {
 				cout << "[ ERROR ] Login denied by the system" << endl;
 				pause();
-				logonScreen();
+				if (requestFromResume == 0) {
+					logonScreen();
+				}
+				else {
+					BarOSkrnl("resume");
+				}
 			}
 			if (lockdown == 1) {
 				cout << "[ ERROR ] Login denied by registry policy" << endl;
 				pause();
-				logonScreen();
+				if (requestFromResume == 0) {
+					logonScreen();
+				}
+				else {
+					BarOSkrnl("resume");
+				}
 			}
 			if (currentUser.find("BarOS SERVICE") == 0) {
 				cout << "[ ERROR ] Seriously? You decided to join the " << osName << " service? Hahahaha" << endl;
 				pause();
-				logonScreen();
+				if (requestFromResume == 0) {
+					logonScreen();
+				}
+				else {
+					BarOSkrnl("resume");
+				}
 			}
+			// Welcome animation
+			string color_welcome_screen;
+			if (regKey == "SYSTEM_COLOR") color_welcome_screen = systemColor;
+			if (regKey == "ADMIN_COLOR") color_welcome_screen = adminColor;
+			if (regKey == "USER_COLOR") color_welcome_screen = userColor;
+			for (int i = 1; i <= 9; i++) {
+				setColor(color_welcome_screen);
+				clearScreen();
+				cout << "======================================================================================================================" << endl;
+				cout << "                                                            ARSLOGON" << endl;
+				cout << "======================================================================================================================" << endl;
+				cout << "                                                          " << osName << endl;
+				cout << endl;
+				cout << "         Build: " << currentBuild << endl;
+				cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
+				cout << endl;
 
+				switch (i) {
+				case 1: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
+				case 2: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
+				case 3: cout << "                                                        Welcome, " << currentUser << "!.." << endl; break;
+				case 4: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
+				case 5: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
+				case 6: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
+				case 7: cout << "                                                        Welcome, " << currentUser << "!.." << endl; break;
+				case 8: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
+				case 9: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
+				}
+				Sleep(500);
+			}
+			fs::remove(configRoot + "\\hibernate.sys");
+			requestFromResume = 0;
 			applyColor();
 		}
 		else {
-			loginAttempts++;
-			ofstream f(failFile);
-			f << loginAttempts;
-			f.close();
+			if (requestFromResume == 0) {
+				loginAttempts++;
+				ofstream f(failFile);
+				f << loginAttempts;
+				f.close();
 
-			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
-			cout << "[ ERROR ] Password incorrect. (Attempt " << loginAttempts << "/" << MAX_LOGIN_ATTEMPTS << ")" << endl;
-			if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-				bsod("9");
-				return;
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] Password incorrect. (Attempt " << loginAttempts << "/" << MAX_LOGIN_ATTEMPTS << ")" << endl;
+				if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+					bsod("9");
+					return;
+				}
+				pause();
+				logonScreen();
 			}
-			pause();
-			logonScreen();
+			else {
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] Password incorrect." << endl;
+				pause();
+				BarOSkrnl("resume");
+			}
 		}
+	}
+	else if (authority == "SudoAuth") {
+		string a_p;
+		sudo_command = 0;
+		char ch;
+		while ((ch = _getch()) != '\r') {
+			if (ch == '\b') {
+				if (!a_p.empty()) {
+					a_p.pop_back();
+					cout << "\b \b";
+				}
+			}
+			else {
+				a_p += ch;
+				cout << '*';
+			}
+		}
+		cout << endl;
+
+		if (checkHash(a_p, EXPECTED_ADMIN_HASH)) {
+			writeLog("SUDO_EXEC: " + t_c + " BY " + currentUser);
+			ex_c = t_c;
+			sudo_command = 1;
+			core(ex_c);
+		}
+		else {
+			sudo_command = 0;
+			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+			cout << "[ ERROR ] Access denied." << endl;
+		}
+		return;
 	}
 	else if (authority == "SecureAS_lockmenu") {
 		clearScreen();
@@ -2054,19 +2032,11 @@ void arslogon(const string& authority) {
 
 void applyColor() {
 	PlaySoundA("C:\\Windows\\Media\\Windows Logon.wav", NULL, SND_FILENAME | SND_ASYNC);
-	if (fileExists(regPath)) {
-		string reg = readFile(regPath);
-		istringstream iss(reg);
-		string line;
-		while (getline(iss, line)) {
-			if (line.find(regKey + "=") != string::npos) {
-				size_t eqPos = line.find('=');
-				string color = trim(line.substr(eqPos + 1));
-				setColor(color);
-				break;
-			}
-		}
-	}
+	string color;
+	if (regKey == "SYSTEM_COLOR") color = systemColor;
+	if (regKey == "ADMIN_COLOR") color = adminColor;
+	if (regKey == "USER_COLOR") color = userColor;
+	setColor(color);
 	interfaceScreen();
 }
 
@@ -2075,10 +2045,10 @@ void applyColor() {
 // =====================================================================
 
 void interfaceScreen() {
-	saveBCD();
+	if (currentUser != "KERNEL") saveBCD();
 
 	// Start services
-	if (safeMode == 0 && rec == 0 && diagnostic == 0) {
+	if (safeMode == 0 && rec == 0 && diagnostic == 0 && currentUser != "KERNEL") {
 		if (!fileExists(sysServices + "\\SysPulse.active")) {
 			cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\SysPulse..." << endl;
 			writeFile(sysServices + "\\SysPulse.active", "RUNNING");
@@ -2117,11 +2087,16 @@ void interfaceScreen() {
 		userHome = sysServices + "\\NetMonitor";
 		fs::create_directories(userHome);
 	}
+	if (currentUser == "KERNEL") {
+		currentUser = "BarOS\\KERNEL";
+		userHome = sysProf;
+		fs::create_directories(userHome);
+	}
 
 	SetCurrentDirectoryA(userHome.c_str());
 
 	clearScreen();
-	if (diagnostic == 2 || diagnostic == 1 || rec == 1) setColor("0e");
+	if (diagnostic == 2 || diagnostic == 1 || rec == 1 || currentUser == "BarOS\\KERNEL") setColor("0e");
 	if (safeMode == 1) setColor("07");
 
 	cout << osName << " [Build " << currentBuild << "] - Session: " << currentUser;
@@ -2132,7 +2107,7 @@ void interfaceScreen() {
 	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
 
 	// Check autorun
-	if (safeMode == 0 && rec == 0 && diagnostic == 0) {
+	if (safeMode == 0 && rec == 0 && diagnostic == 0 && currentUser != "BarOS\\KERNEL") {
 		string alertFile = userHome + "\\alert.sys";
 		if (fileExists(alertFile)) {
 			setColor("4f");
@@ -2170,7 +2145,7 @@ void interfaceScreen() {
 void cmdLoop() {
 	while (true) {
 		// services
-		if (safeMode == 0 && rec == 0 && diagnostic == 0) {
+		if (safeMode == 0 && rec == 0 && diagnostic == 0 && currentUser != "BarOS\\KERNEL") {
 			if (!dirExists(sysServices)) fs::create_directories(sysServices);
 			if (!fileExists(sysServices + "\\TrustedInstaller.active")) {
 				writeFile(sysServices + "\\TrustedInstaller.active", "RUNNING");
@@ -2249,10 +2224,63 @@ void cmdLoop() {
 		// Prompt
 		sudo_command = 0;
 		cout << currentUser << "@ARSLANIUS> ";
-		string cmd;
-		getline(cin, cmd);
-		cmd = trim(cmd);
+		string cmd = "";
 
+		while (true) {
+			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+				(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+				(GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
+
+				while (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+					Sleep(50);
+				}
+				if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
+					currentUser != "BarOS SERVICE\\SysPulse" &&
+					currentUser != "BarOS SERVICE\\NetMonitor" &&
+					currentUser != "BarOS\\KERNEL") {
+					arslogon("SecureAS_lockmenu");
+					break;
+				}
+			}
+
+			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+				(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+				(GetAsyncKeyState('K') & 0x8000)) {
+
+				while (GetAsyncKeyState('K') & 0x8000) {
+					Sleep(50);
+				}
+				if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
+					currentUser != "BarOS SERVICE\\SysPulse" &&
+					currentUser != "BarOS SERVICE\\NetMonitor" &&
+					currentUser != "BarOS\\KERNEL") {
+					BarOSkrnl("reload");
+					break;
+				}
+			}
+			if (_kbhit()) {
+				char ch = _getch();
+
+				if (ch == '\r' || ch == '\n') {
+					cout << endl;
+					break;
+				}
+				else if (ch == '\b') {
+					if (!cmd.empty()) {
+						cmd.pop_back();
+						cout << "\b \b";
+					}
+				}
+				else if (ch >= 32 && ch <= 126) {
+					cmd += ch;
+					cout << ch;
+				}
+			}
+
+			Sleep(10);
+		}
+
+		cmd = trim(cmd);
 		if (cmd.empty()) continue;
 
 		core(cmd);
@@ -2277,7 +2305,8 @@ void core(const string& cmd) {
 	if (cmd == "lockmenu") {
 		if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
 			currentUser != "BarOS SERVICE\\SysPulse" &&
-			currentUser != "BarOS SERVICE\\NetMonitor"
+			currentUser != "BarOS SERVICE\\NetMonitor" &&
+			currentUser != "BarOS\\KERNEL"
 			) {
 			arslogon("SecureAS_lockmenu");
 		}
@@ -2291,9 +2320,9 @@ void core(const string& cmd) {
 		}
 	}
 
-	string ex_c = cmd;
+	ex_c = cmd;
 	string f_w = firstWord;
-	string t_c = rest;
+	t_c = rest;
 
 	// Handle sudo
 	if (f_w == "sudo" || f_w == "Sudo") {
@@ -2303,6 +2332,7 @@ void core(const string& cmd) {
 		}
 		if (currentUser == "BarOS AUTHORITY\\SYSTEM" ||
 			currentUser == "SYSTEM ADMINISTRATOR" ||
+			currentUser == "BarOS\\KERNEL" ||
 			currentUser == "BarOS SERVICE\\TrustedInstaller" ||
 			currentUser == "BarOS SERVICE\\SysPulse" ||
 			currentUser == "BarOS SERVICE\\NetMonitor") {
@@ -2311,34 +2341,7 @@ void core(const string& cmd) {
 			return;
 		}
 		cout << "Enter ADMIN password: ";
-		string a_p;
-		sudo_command = 0;
-		char ch;
-		while ((ch = _getch()) != '\r') {
-			if (ch == '\b') {
-				if (!a_p.empty()) {
-					a_p.pop_back();
-					cout << "\b \b";
-				}
-			}
-			else {
-				a_p += ch;
-				cout << '*';
-			}
-		}
-		cout << endl;
-
-		if (checkHash(a_p, EXPECTED_ADMIN_HASH)) {
-			writeLog("SUDO_EXEC: " + t_c + " BY " + currentUser);
-			ex_c = t_c;
-			sudo_command = 1;
-			core(ex_c);
-		}
-		else {
-			sudo_command = 0;
-			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
-			cout << "[ ERROR ] Access denied." << endl;
-		}
+		arslogon("SudoAuth");
 		return;
 	}
 
@@ -2347,7 +2350,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "GUEST") {
 		bool allowed = false;
-		vector<string> guestCmds = { "help", "lock", "wait_mode", "echo", "ls", "cd",
+		vector<string> guestCmds = { "help", "lock", "hibernate", "wait_mode", "echo", "ls", "cd",
 									 "lockmenu", "report", "cls", "ver", "whoami",
 									 "calc", "notepad", "reboot", "shutdown" };
 		for (const string& c : guestCmds) {
@@ -2359,9 +2362,21 @@ void core(const string& cmd) {
 		}
 	}
 
+	if (currentUser == "BarOS\\KERNEL") {
+		bool restricted = false;
+		vector<string> kernelCmds = { "lock", "lockmenu" };
+		for (const string& c : kernelCmds) {
+			if (ex_c == c) { restricted = true; break; }
+		}
+		if (restricted) {
+			cout << "[ SECURITY ] You cannot log out of your account." << endl;
+			return;
+		}
+	}
+
 	if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
 		bool allowed = false;
-		vector<string> tiCmds = { "help", "mv", "bcdboot", "cp", "rm", "touch", "edit",
+		vector<string> tiCmds = { "help", "mv", "bcdboot", "hibernate", "cp", "rm", "touch", "edit",
 								  "echo", "bcdedit", "mkdir", "ls", "cd", "cat", "ren",
 								  "reset", "reboot_to_recovery", "cls", "ver", "whoami",
 								  "events", "sfc", "adduser", "deluser", "regedit",
@@ -2377,7 +2392,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\SysPulse") {
 		bool allowed = false;
-		vector<string> spCmds = { "help", "ls", "sysinfo", "events", "report", "echo",
+		vector<string> spCmds = { "help", "ls", "sysinfo", "hibernate", "events", "report", "echo",
 								  "taskmgr", "cd", "cat", "reboot", "shutdown",
 								  "reboot_to_recovery", "cls", "ver", "whoami" };
 		for (const string& c : spCmds) {
@@ -2391,7 +2406,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\NetMonitor") {
 		bool allowed = false;
-		vector<string> nmCmds = { "help", "reboot", "ping", "netstat", "ipconfig",
+		vector<string> nmCmds = { "help", "reboot", "ping", "hibernate", "netstat", "ipconfig",
 								  "echo", "tracert", "nslookup", "arp", "route",
 								  "shutdown", "cls", "whoami" };
 		for (const string& c : nmCmds) {
@@ -2405,7 +2420,7 @@ void core(const string& cmd) {
 
 	if (safeMode == 1) {
 		bool allowed = false;
-		vector<string> safeCmds = { "help", "lock", "wait_mode", "lockmenu", "mv", "cp",
+		vector<string> safeCmds = { "help", "lock", "wait_mode", "hibernate", "lockmenu", "mv", "cp",
 									"echo", "bcdboot", "bcdedit", "rm", "touch", "mkdir",
 									"ls", "cd", "cat", "ren", "backup", "backup-restore",
 									"sysinfo", "reset", "reboot_to_recovery", "report",
@@ -2423,7 +2438,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "ping", "as-pack", "as-unpack", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -2446,12 +2461,13 @@ void core(const string& cmd) {
 	if (enableLua == 1 &&
 		currentUser != "BarOS AUTHORITY\\SYSTEM" &&
 		currentUser != "SYSTEM ADMINISTRATOR" &&
+		currentUser != "BarOS\\KERNEL" &&
 		currentUser != "BarOS SERVICE\\TrustedInstaller" &&
 		currentUser != "BarOS SERVICE\\SysPulse" &&
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		sudo_command == 0) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "as-pack", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -2470,7 +2486,7 @@ void core(const string& cmd) {
 
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, Calc, taskmgr, edit, install, regedit, ArsStore, sysinfo" << endl;
-		cout << "System: Help, Lock, lockmenu, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun" << endl;
+		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun" << endl;
 		cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
@@ -2599,7 +2615,7 @@ void core(const string& cmd) {
 		for (const auto& entry : fs::directory_iterator(fs::current_path())) {
 			if (entry.is_regular_file()) {
 				string name = entry.path().filename().string();
-				if (name != zipPath && name != "ARSLANIUS 28.exe") {  // не пакуем архив и сам .exe
+				if (name != zipPath && name != "ARSLANIUS 28.exe" && name != "ARSLANIUS.28.exe") {
 					cout << "[ PACK ] Adding: " << name << endl;
 					string content = readFile(entry.path().string());
 					mz_zip_writer_add_mem(&zip, name.c_str(), content.c_str(), content.size(), MZ_DEFAULT_COMPRESSION);
@@ -2768,7 +2784,7 @@ void core(const string& cmd) {
 		report << "<h1>" << osName << " - SYSTEM REPORT</h1>" << endl;
 		report << "<hr>" << endl;
 		report << "<p>Build: " << currentBuild << "</p>" << endl;
-		report << "<p>Kernel: BarOS 23.1</p>" << endl;
+		report << "<p>Kernel: BarOS " << VersionBarOSkrnl << "</p>" << endl;
 		report << "<p>Active User: " << currentUser << "</p>" << endl;
 		report << "<p>Safe Mode: " << safeMode << "</p>" << endl;
 		report << "<h2>Registered Users:</h2><pre>" << endl;
@@ -2905,6 +2921,9 @@ void core(const string& cmd) {
 	else if (ex_c == "shutdown") {
 		acpiRequest = 1;
 		arslogon("logoutRequest");
+	}
+	else if (ex_c == "hibernate") {
+		BarOSkrnl("hibernate");
 	}
 	else if (ex_c == "reboot") {
 		acpiRequest = 2;
@@ -3145,7 +3164,7 @@ void core(const string& cmd) {
 		cout << "[SYSTEM]" << endl;
 		cout << "  OS Name       : " << osName << endl;
 		cout << "  Build         : " << currentBuild << endl;
-		cout << "  Kernel        : BarOS 23.1" << endl;
+		cout << "  Kernel        : BarOS " << VersionBarOSkrnl << endl;
 		cout << "  Safe Mode     : " << safeMode << endl;
 		cout << endl;
 		cout << "[SERVICES]" << endl;
@@ -3194,6 +3213,11 @@ void core(const string& cmd) {
 		getline(cin, input);
 		input = trim(input);
 		if (!input.empty()) defaultMode = stoi(input);
+
+		cout << "Enter value DRIVER_LOAD_OFF (ex: 0): ";
+		getline(cin, input);
+		input = trim(input);
+		if (!input.empty()) DriverloadOFF = stoi(input);
 
 		saveBCD();
 		cout << "[ DONE ] Configuration saved." << endl;
@@ -3269,7 +3293,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "taskmgr") {
 		int cpu = rand() % 15 + 1;
-		cout << "[ CORE ] BarOS 23.1 (CPU: " << cpu << "%)" << endl;
+		cout << "[ CORE ] BarOS " << VersionBarOSkrnl << " (CPU: " << cpu << "%)" << endl;
 	}
 	else if (ex_c == "events") {
 		cout << readFile(logPath) << endl;
@@ -3332,7 +3356,7 @@ void shutdownScreen() {
 	fs::remove(sysServices + "\\SysPulse.active");
 	fs::remove(sysServices + "\\TrustedInstaller.active");
 	fs::remove(sysServices + "\\NetMonitor.active");
-	exit(0);
+	BarOSkrnl("ACPI");
 }
 
 void rebootScreen() {
@@ -3344,19 +3368,407 @@ void rebootScreen() {
 	fs::remove(sysServices + "\\SysPulse.active");
 	fs::remove(sysServices + "\\TrustedInstaller.active");
 	fs::remove(sysServices + "\\NetMonitor.active");
-	bootMenu();
+	BarOSkrnl("ACPI");
 }
 
 // =====================================================================
-// MAIN
+// MAIN AND KERNEL
 // =====================================================================
 
-int main() {
-	SetConsoleTitleA("ARSLANIUS 28 RC");
+void BarOSkrnl(string_view Kernel_mode) {
+	if (Kernel_mode == "initPath") {
+		VersionBarOSkrnl = "24.0";
+		char buffer[MAX_PATH];
+		GetModuleFileNameA(NULL, buffer, MAX_PATH);
+		string_view exePath(buffer);
+		size_t lastSlash = exePath.find_last_of("\\/");
+		rootPath = exePath.substr(0, lastSlash);
+
+		configRoot = rootPath + "\\Settings And System Files";
+		kernelPath = configRoot + "\\kernel.dll";
+		usersRoot = rootPath + "\\Users";
+		programsRoot = rootPath + "\\Programs";
+		sysProf = configRoot + "\\systemprofile";
+		sysServices = sysProf;
+		regPath = configRoot + "\\REG.cfg";
+		logPath = configRoot + "\\system.log";
+		restoreRoot = rootPath + "\\RestorePoints";
+
+		userHome = sysProf;
+		currentUser = "KERNEL";
+
+		if (!dirExists(configRoot)) {
+			ensureDirectories();
+			bsod("1a");
+		}
+		return;
+	}
+	if (Kernel_mode == "loading") {
+		loadBCD();
+		loadRegistry();
+		userHome = sysProf;
+		currentUser = "KERNEL";
+		auto checkFileSize = [](string_view path, size_t maxSize, string_view bsodCode) -> bool {
+			HANDLE hFile = CreateFileA(path.data(), GENERIC_READ, FILE_SHARE_READ,
+				NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+			if (hFile != INVALID_HANDLE_VALUE) {
+				LARGE_INTEGER fileSize;
+				if (GetFileSizeEx(hFile, &fileSize)) {
+					if (fileSize.QuadPart > static_cast<LONGLONG>(maxSize)) {
+						DWORD64 size = static_cast<DWORD64>(fileSize.QuadPart);
+						CloseHandle(hFile);
+						ptr = new DWORD64(size);
+						bsod(bsodCode.data());
+						return false;
+					}
+				}
+				CloseHandle(hFile);
+			}
+			return true;
+		};
+
+		if (!checkFileSize(kernelPath, MAX_KERNEL_SIZE, "10")) return;
+		if (!checkFileSize(regPath, MAX_REGISTRY_SIZE, "11")) return;
+		if (!checkFileSize(logPath, MAX_LOG_SIZE, "12")) return;
+
+		if (DriverloadOFF != 1) {
+			clearScreen();
+			setColor("0f");
+			g_api.register_command = register_driver_command;
+			g_api.print = [](const char* text) { std::cout << text; };
+			g_api.print_slow = [](const char* text) { print_slow(text); };
+			g_api.read_registry = [](const char* key) -> const char* {
+				static std::string value;
+				std::string content = readFile(regPath);
+				std::istringstream iss(content);
+				std::string line;
+				while (std::getline(iss, line)) {
+					size_t eq = line.find('=');
+					if (eq != std::string::npos) {
+						std::string k = trim(line.substr(0, eq));
+						if (k == key) {
+							value = trim(line.substr(eq + 1));
+							return value.c_str();
+						}
+					}
+				}
+				value = "";
+				return value.c_str();
+			};
+			g_api.write_registry = [](const char* key, const char* value) {
+				std::string content = readFile(regPath);
+				std::istringstream iss(content);
+				std::string line, newContent;
+				bool found = false;
+				while (std::getline(iss, line)) {
+					size_t eq = line.find('=');
+					if (eq != std::string::npos) {
+						std::string k = trim(line.substr(0, eq));
+						if (k == key) {
+							newContent += std::string(key) + "=" + value + "\n";
+							found = true;
+						}
+						else {
+							newContent += line + "\n";
+						}
+					}
+					else {
+						newContent += line + "\n";
+					}
+				}
+				if (!found) {
+					newContent += std::string(key) + "=" + value + "\n";
+				}
+				writeFile(regPath, newContent);
+			};
+			g_api.write_log = [](const char* message) { writeLog(message); };
+			g_api.file_exists = [](const char* path) -> bool { return fileExists(path); };
+			g_api.read_file = [](const char* path) -> const char* {
+				static std::string content;
+				content = readFile(path);
+				return content.c_str();
+			};
+			g_api.write_file = [](const char* path, const char* content) {
+				writeFile(path, content);
+			};
+			g_api.get_current_user = []() -> const char* {
+				static std::string user;
+				user = currentUser;
+				return user.c_str();
+			};
+			g_api.clear_screen = []() { clearScreen(); };
+			g_api.set_color = [](const char* color) { setColor(color); };
+			g_api.pause = []() { pause(); };
+			g_api.delete_registry = [](const char* key) {
+				string content = readFile(regPath);
+				istringstream iss(content);
+				string line, newContent;
+				while (getline(iss, line)) {
+					size_t eq = line.find('=');
+					if (eq != string::npos && trim(line.substr(0, eq)) == key) continue;
+					newContent += line + "\n";
+				}
+				writeFile(regPath, newContent);
+			};
+			g_api.dir_exists = [](const char* path) -> bool { return dirExists(path); };
+			g_api.append_file = [](const char* path, const char* content) { appendFile(path, content); };
+			g_api.delete_file = [](const char* path) -> bool { return DeleteFileA(path); };
+			g_api.create_directory = [](const char* path) -> bool { return CreateDirectoryA(path, NULL); };
+			g_api.unregister_command = [](const char* name) {
+				string cmd_name = name;
+				transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::tolower);
+				driverCommands.erase(cmd_name);
+			};
+			g_api.execute_command = [](const char* cmd) { core(string(cmd)); };
+			g_api.get_os_name = []() -> const char* { return osName.c_str(); };
+			g_api.get_build = []() -> const char* { return currentBuild.c_str(); };
+			g_api.get_safe_mode = []() -> int { return safeMode; };
+			g_api.shell_execute = [](const char* cmd) -> int { return system(cmd); };
+			g_api.get_root_path = []() -> const char* { return rootPath.c_str(); };
+			g_api.get_config_path = []() -> const char* { return configRoot.c_str(); };
+			g_api.get_users_path = []() -> const char* { return usersRoot.c_str(); };
+			g_api.get_drivers_path = []() -> const char* {
+				static string dp = configRoot + "\\ServiceDriverRoot";
+				return dp.c_str();
+			};
+			g_api.get_driver_home = [](const char* driver_name) -> const char* {
+				static string home;
+				home = configRoot + "\\ServiceDriverRoot\\" + driver_name;
+				if (!dirExists(home)) {
+					fs::create_directories(home);
+					fs::create_directories(home + "\\logs");
+				}
+				return home.c_str();
+			};
+			g_api.calculate_hash = [](const char* input) -> const char* {
+				static string hash;
+				hash = calculateHash(input);
+				return hash.c_str();
+			};
+			g_api.user_exists = [](const char* username) -> bool {
+				string k = readFile(kernelPath);
+				string u = username;
+				return k.find(u + " =") != string::npos || k.find(u + "=") != string::npos;
+			};
+			string driversRoot = configRoot + "\\Drivers";
+			if (!dirExists(driversRoot)) {
+				fs::create_directories(driversRoot);
+				return;
+			}
+
+			driverCommands.clear();
+			HMODULE hMods[1024];
+			DWORD cbNeeded;
+			if (EnumProcessModules(GetCurrentProcess(), hMods, sizeof(hMods), &cbNeeded)) {
+				for (unsigned int i = 0; i < (cbNeeded / sizeof(HMODULE)); i++) {
+					char modName[MAX_PATH];
+					if (GetModuleFileNameA(hMods[i], modName, sizeof(modName))) {
+						string_view name(modName);
+						if (name.find(".asd") != string_view::npos) {
+							FreeLibrary(hMods[i]);
+						}
+					}
+				}
+			}
+
+			WIN32_FIND_DATAA fd;
+			string searchPath = driversRoot + "\\*.asd";
+			HANDLE hFind = FindFirstFileA(searchPath.c_str(), &fd);
+
+			if (hFind == INVALID_HANDLE_VALUE) {
+				return;
+			}
+
+			cout << endl << "[ BOOT MANAGER ] Loading drivers..." << endl;
+
+			int loaded = 0, failed = 0;
+
+			do {
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+					string driverPath = driversRoot + "\\" + fd.cFileName;
+
+					HMODULE hMod = LoadLibraryA(driverPath.c_str());
+					if (!hMod) {
+						DWORD err = GetLastError();
+						cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (LoadLibrary error: " << err << ")" << endl;
+						failed++;
+						continue;
+					}
+
+					DriverInitFunc init = (DriverInitFunc)GetProcAddress(hMod, "asd_init");
+					if (!init) {
+						DWORD err = GetLastError();
+						cout << "[ DRIVER ] " << fd.cFileName << " - FAILED (No asd_init, error: " << err << ")" << endl;
+						FreeLibrary(hMod);
+						failed++;
+						continue;
+					}
+
+					cout << "[ DRIVER ] " << fd.cFileName << "..." << endl;
+					int result = init(&g_api);
+
+					if (result == BAROS_SUCCESS) {
+						loaded++;
+					}
+					else if (result == BAROS_CRITICAL) {
+						cout << "FAILED (BAROSSTATUS: CRITICAL)" << endl;
+						FreeLibrary(hMod);
+						failed++;
+						pause();
+						bsod("15");
+					}
+					else {
+						cout << "FAILED (Init returned: " << result << ")" << endl;
+						FreeLibrary(hMod);
+						failed++;
+					}
+				}
+			} while (FindNextFileA(hFind, &fd));
+
+			FindClose(hFind);
+
+			cout << "[ BOOT MANAGER ] Drivers: " << loaded
+				<< " loaded, " << failed << " failed" << endl;
+			pause();
+		}
+		return;
+	}
+	if (Kernel_mode == "ACPI") {
+		if (acpiRequest == 1) {
+			if (fastBoot == 1) BarOSkrnl("hibernate");
+			exit(0);
+		}
+		if (acpiRequest == 2) bootMenu();
+		return;
+	}
+	if (Kernel_mode == "hibernate") {
+		string hiberPath = configRoot + "\\hibernate.sys";
+		stringstream ss;
+		ss << "USER=" << currentUser << endl;
+		ss << "USER_HOME=" << userHome << endl;
+		ss << "SAFE_MODE=" << safeMode << endl;
+		ss << "REC=" << rec << endl;
+		ss << "DIAG=" << diagnostic << endl;
+		ss << "DATE=" << getCurrentDateTime() << endl;
+		writeFile(hiberPath, ss.str());
+		exit(0);
+		return;
+	}
+	if (Kernel_mode == "resume") {
+		if (fileExists(configRoot + "\\hibernate.sys")) {
+			string hiberPath = configRoot + "\\hibernate.sys";
+
+			ifstream hiber(hiberPath);
+			string line;
+			while (getline(hiber, line)) {
+				size_t sep = line.find('=');
+				if (sep == string::npos) continue;
+				string key = line.substr(0, sep);
+				string value = line.substr(sep + 1);
+
+				if (value.empty()) continue;
+
+				try {
+					if (key == "USER") currentUser = value;
+					else if (key == "USER_HOME") userHome = value;
+					else if (key == "SAFE_MODE") safeMode = stoi(value);
+					else if (key == "REC") rec = stoi(value);
+					else if (key == "DIAG") diagnostic = stoi(value);
+				}
+				catch (...) {
+					continue;
+				}
+			}
+		}
+		for (int i = 1; i <= 12; i++) {
+			clearScreen();
+			setColor("0f");
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                  Resuming " << osName << "..." << endl;
+			cout << endl;
+			cout << "         Build: " << currentBuild << endl;
+			cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
+			cout << endl;
+			cout << "                                                     _____________" << endl;
+
+			switch (i) {
+			case 12: cout << "                                                    |..           |" << endl; break;
+			case 11: cout << "                                                    |...          |" << endl; break;
+			case 10: cout << "                                                    | ...         |" << endl; break;
+			case 9: cout << "                                                    |  ...        |" << endl; break;
+			case 8: cout << "                                                    |   ...       |" << endl; break;
+			case 7: cout << "                                                    |    ...      |" << endl; break;
+			case 6: cout << "                                                    |     ...     |" << endl; break;
+			case 5: cout << "                                                    |      ...    |" << endl; break;
+			case 4: cout << "                                                    |       ...   |" << endl; break;
+			case 3: cout << "                                                    |        ...  |" << endl; break;
+			case 2: cout << "                                                    |         ... |" << endl; break;
+			case 1: cout << "                                                    |          ...|" << endl; break;
+			}
+			cout << "                                                     -------------" << endl;
+			Sleep(230);
+		}
+		if (currentUser == "BarOS SERVICE\\TrustedInstaller" ||
+			currentUser == "BarOS SERVICE\\SysPulse" ||
+			currentUser == "BarOS SERVICE\\NetMonitor") {
+			fs::remove(configRoot + "\\hibernate.sys");
+			interfaceScreen();
+		}
+		if (currentUser == "BarOS AUTHORITY\\SYSTEM") currentUser = "SYSTEM";
+		clearScreen();
+		setColor("5b");
+		cout << "Enter password for " << currentUser << ": ";
+		// Hide password input
+		char ch;
+		p_in = "";
+		while ((ch = _getch()) != '\r') {
+			if (ch == '\b') {
+				if (!p_in.empty()) {
+					p_in.pop_back();
+					cout << "\b \b";
+				}
+			}
+			else {
+				p_in += ch;
+				cout << '*';
+			}
+		}
+		cout << endl;
+		requestFromResume = 1;
+		arslogon("authorization");
+	}
+	if (Kernel_mode == "EARLY_LAUNCH_CONSOLE") {
+		interfaceScreen();
+		return;
+	}
+	if (Kernel_mode == "reload") {
+		string oldUser = currentUser;
+		string oldPath = userHome;
+		BarOSkrnl("loading");
+		userHome = oldPath;
+		currentUser = oldUser;
+		applyColor();
+		interfaceScreen();
+		return;
+	}
+	bsod("16");
+}
+
+int main(int argc, char* argv[]) {
+	SetConsoleTitleA("ARSLANIUS 28 RC2");
 
 	SetConsoleWidthOnly(120);
 
-	initPaths();
+	BarOSkrnl("initPath");
+	for (int i = 1; i < argc; ++i) {
+		std::string arg = argv[i];
+
+		if (arg == "-earlyconsole") {
+			BarOSkrnl("EARLY_LAUNCH_CONSOLE");
+		}
+	}
 
 	bootMenu();
 
