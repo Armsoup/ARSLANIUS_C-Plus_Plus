@@ -63,11 +63,13 @@ string restoreRoot;
 
 string currentUser;
 string userHome;
+string UnchangeableUserHome;
 string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
 
 DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
 DWORD64 logoutTimeout = 60;
+DWORD64 kernelStartTime = 0;
 int defaultMode = DEFAULT_MODE_DEFAULT;
 int bootChoice = 0;
 int requestFromResume = 0;
@@ -86,16 +88,20 @@ int sudo_command = 0;
 int lockdown = 0;
 int loginAttempts = 0;
 int DriverloadOFF = 0;
+int autorun = 1;
 DWORD64* ptr = nullptr;
 string systemColor = "0e";
 string adminColor = "4f";
 string userColor = "1f";
 string t_c;
+string ConfigPath;
 string ex_c;
 string recoveryRequest = "0";
 string p_in;
 string failFile;
 string u_in;
+string color_user;
+string defaultuserHome;
 
 string regKey = "SYSTEM_COLOR";
 
@@ -136,6 +142,7 @@ bool dirExists(const string& path);
 vector<string> split(const string& s, char delimiter);
 string trim(const string& s);
 string getCurrentDateTime();
+string getUptime();
 void writeLog(const string& message);
 string readFile(const string& path);
 void writeFile(const string& path, const string& content);
@@ -153,6 +160,33 @@ string trim(const string& s) {
 	if (start == string::npos) return "";
 	size_t end = s.find_last_not_of(" \t\r\n");
 	return s.substr(start, end - start + 1);
+}
+
+string getUptime() {
+	if (kernelStartTime == 0) return "[ ERROR ] For some unknown reason, the kernel was not initialized.";
+	DWORD64 now = GetTickCount64();
+	DWORD64 elapsed = now - kernelStartTime;
+	DWORD64 seconds = elapsed / 1000;
+	DWORD64 minutes = seconds / 60;
+	DWORD64 hours = minutes / 60;
+	DWORD64 days = hours / 24;
+	seconds %= 60;
+	minutes %= 60;
+	hours %= 24;
+	char buf[128];
+	if (days > 0) {
+		sprintf_s(buf, "%llud %lluh %llum %llus", days, hours, minutes, seconds);
+	}
+	else if (hours > 0) {
+		sprintf_s(buf, "%lluh %llum %llus", hours, minutes, seconds);
+	}
+	else if (minutes > 0) {
+		sprintf_s(buf, "%llum %llus", minutes, seconds);
+	}
+	else {
+		sprintf_s(buf, "%llus", seconds);
+	}
+	return string(buf);
 }
 
 vector<string> split(const string& s, char delimiter) {
@@ -1613,7 +1647,7 @@ void logonScreen() {
 	cout << endl;
 	int listStartY = 6;
 	for (int i = 0; i < (int)users.size(); i++) {
-		cout << "    "; 
+		cout << "    ";
 		if (users[i] == "Shutdown") {
 			cout << "[SHUTDOWN] Turn off ARSLANIUS" << endl;
 		}
@@ -1649,11 +1683,11 @@ void logonScreen() {
 		coord.Y = listStartY + pos;
 		SetConsoleCursorPosition(hConsole, coord);
 		if (active) {
-			SetConsoleTextAttribute(hConsole, 0x5F); 
+			SetConsoleTextAttribute(hConsole, 0x5F);
 			cout << "  > ";
 		}
 		else {
-			SetConsoleTextAttribute(hConsole, 0x5B); 
+			SetConsoleTextAttribute(hConsole, 0x5B);
 			cout << "    ";
 		}
 		SetConsoleTextAttribute(hConsole, 0x5B);
@@ -1857,7 +1891,19 @@ void arslogon(const string& authority) {
 				}
 			}
 			// Welcome animation
+			if (requestFromResume != 1) {
+				UnchangeableUserHome = userHome;
+			}
+			if (requestFromResume == 1) {
+				if (currentUser != "BarOS AUTHORITY\\SYSTEM") {
+					UnchangeableUserHome = usersRoot + "\\" + currentUser;
+				}
+				else {
+					UnchangeableUserHome = sysProf;
+				}
+			}
 			string color_welcome_screen;
+			PlaySound(MAKEINTRESOURCE(IDR_WAVE2), GetModuleHandle(NULL), SND_RESOURCE | SND_ASYNC);
 			if (regKey == "SYSTEM_COLOR") color_welcome_screen = systemColor;
 			if (regKey == "ADMIN_COLOR") color_welcome_screen = adminColor;
 			if (regKey == "USER_COLOR") color_welcome_screen = userColor;
@@ -1871,20 +1917,54 @@ void arslogon(const string& authority) {
 				cout << endl;
 				cout << "         Build: " << currentBuild << endl;
 				cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
+				cout << "         Uptime: " << getUptime() << endl;
 				cout << endl;
 
 				switch (i) {
-				case 1: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
-				case 2: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
-				case 3: cout << "                                                        Welcome, " << currentUser << "!.." << endl; break;
-				case 4: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
-				case 5: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
-				case 6: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
-				case 7: cout << "                                                        Welcome, " << currentUser << "!.." << endl; break;
-				case 8: cout << "                                                        Welcome, " << currentUser << "!." << endl; break;
-				case 9: cout << "                                                        Welcome, " << currentUser << "!" << endl; break;
+				case 1: cout << "                                                Applying your personal settings" << endl; break;
+				case 2: cout << "                                                Applying your personal settings." << endl; break;
+				case 3: cout << "                                                Applying your personal settings.." << endl; break;
+				case 4: cout << "                                                Applying your personal settings..." << endl; break;
+				case 5: cout << "                                                Applying your personal settings.." << endl; break;
+				case 6: cout << "                                                Applying your personal settings." << endl; break;
+				case 7: cout << "                                                Applying your personal settings" << endl; break;
+				case 8: cout << "                                                Applying your personal settings." << endl; break;
+				case 9: cout << "                                                Applying your personal settings.." << endl; break;
 				}
 				Sleep(500);
+			}
+			defaultuserHome = UnchangeableUserHome;
+			if (regKey == "SYSTEM_COLOR") color_user = systemColor;
+			if (regKey == "ADMIN_COLOR") color_user = adminColor;
+			if (regKey == "USER_COLOR") color_user = userColor;
+			fs::create_directories(UnchangeableUserHome + "\\USER_DATA");
+			if (requestFromResume != 1) {
+				ConfigPath = UnchangeableUserHome + "\\USER_DATA" + "\\BAROS_USER_DATA.sys";
+				if (fileExists(ConfigPath)) {
+					ifstream config(ConfigPath);
+					string line;
+					while (getline(config, line)) {
+						size_t sep = line.find('=');
+						if (sep == string::npos) continue;
+						string key = line.substr(0, sep);
+						string value = line.substr(sep + 1);
+
+						if (value.empty()) continue;
+
+						try {
+							if (key == "LOGOUT_TIMEOUT") logoutTimeout = stoi(value);
+							else if (key == "USER_DEFAULT_HOME") defaultuserHome = value;
+							else if (key == "COLOR") color_user = value;
+							else if (key == "ENABLE_AUTORUN") autorun = stoi(value);
+						}
+						catch (...) {
+							continue;
+						}
+					}
+					userHome = defaultuserHome;
+					fs::create_directories(userHome);
+					SetCurrentDirectoryA(userHome.c_str());
+				}
 			}
 			fs::remove(configRoot + "\\hibernate.sys");
 			requestFromResume = 0;
@@ -1990,11 +2070,19 @@ void arslogon(const string& authority) {
 	}
 	else if (authority == "logoutRequest") {
 		clearScreen();
-		setColor("5b");
-		cout << "\n\n                                                      Logout...\n\n";
+		PlaySound(MAKEINTRESOURCE(IDR_WAVE3), GetModuleHandle(NULL), SND_RESOURCE | SND_ASYNC);
+		setColor("1f");
+		cout << "                                                  " << osName << endl;
+		cout << "\n\n                                             Saving your settings...\n\n";
+		ConfigPath = UnchangeableUserHome + "\\USER_DATA" + "\\BAROS_USER_DATA.sys";
+		fs::create_directories(UnchangeableUserHome + "\\USER_DATA");
+		stringstream ss;
+		ss << "LOGOUT_TIMEOUT=" << logoutTimeout << endl;
+		ss << "USER_DEFAULT_HOME=" << defaultuserHome << endl;
+		ss << "COLOR=" << color_user << endl;
+		ss << "ENABLE_AUTORUN=" << autorun << endl;
+		writeFile(ConfigPath, ss.str());
 		Sleep(2000);
-
-		PlaySoundA("C:\\Windows\\Media\\Windows Shutdown.wav", NULL, SND_FILENAME | SND_ASYNC);
 		if (acpiRequest == 1) shutdownScreen();
 		else if (acpiRequest == 2) rebootScreen();
 		else {
@@ -2031,12 +2119,14 @@ void arslogon(const string& authority) {
 
 
 void applyColor() {
-	PlaySoundA("C:\\Windows\\Media\\Windows Logon.wav", NULL, SND_FILENAME | SND_ASYNC);
 	string color;
 	if (regKey == "SYSTEM_COLOR") color = systemColor;
 	if (regKey == "ADMIN_COLOR") color = adminColor;
 	if (regKey == "USER_COLOR") color = userColor;
 	setColor(color);
+	if (fileExists(ConfigPath)) {
+		setColor(color_user);
+	}
 	interfaceScreen();
 }
 
@@ -2108,7 +2198,7 @@ void interfaceScreen() {
 
 	// Check autorun
 	if (safeMode == 0 && rec == 0 && diagnostic == 0 && currentUser != "BarOS\\KERNEL") {
-		string alertFile = userHome + "\\alert.sys";
+		string alertFile = UnchangeableUserHome + "\\alert.sys";
 		if (fileExists(alertFile)) {
 			setColor("4f");
 			cout << "======================================================================================================================" << endl;
@@ -2125,16 +2215,18 @@ void interfaceScreen() {
 			applyColor();
 			interfaceScreen();
 		}
-		string mailFile = userHome + "\\mail.txt";
+		string mailFile = UnchangeableUserHome + "\\mail.txt";
 		if (fileExists(mailFile)) {
 			cout << "[ MAIL ] You have unread messages! Type \"mail-read\"." << endl;
 		}
-		string autorunFile = userHome + "\\autorun.txt";
-		if (fileExists(autorunFile)) {
-			string cmdLine = trim(readFile(autorunFile));
-			if (!cmdLine.empty()) {
-				cout << "[ AUTO ] Starting: " << cmdLine << "..." << endl;
-				core(cmdLine);
+		if (autorun == 1) {
+			string autorunFile = UnchangeableUserHome + "\\autorun.txt";
+			if (fileExists(autorunFile)) {
+				string cmdLine = trim(readFile(autorunFile));
+				if (!cmdLine.empty()) {
+					cout << "[ AUTO ] Starting: " << cmdLine << "..." << endl;
+					core(cmdLine);
+				}
 			}
 		}
 	}
@@ -2496,7 +2588,7 @@ void core(const string& cmd) {
 		cout << "Path: " << userHome << endl;
 	}
 	else if (ex_c == "mail-read") {
-		string mailFile = userHome + "\\mail.txt";
+		string mailFile = UnchangeableUserHome + "\\mail.txt";
 		if (fileExists(mailFile)) {
 			clearScreen();
 			cout << "======================================================================================================================" << endl;
@@ -2755,7 +2847,7 @@ void core(const string& cmd) {
 			cout << "[ ERROR ] Command cannot be empty." << endl;
 			return;
 		}
-		writeFile(userHome + "\\autorun.txt", autorunCmd);
+		writeFile(UnchangeableUserHome + "\\autorun.txt", autorunCmd);
 		writeLog("AUTORUN_SET: " + autorunCmd + " BY " + currentUser);
 		cout << "[ OK ] Autorun set: " << autorunCmd << endl;
 	}
@@ -3159,12 +3251,14 @@ void core(const string& cmd) {
 		cout << endl;
 		cout << "[USER]" << endl;
 		cout << "  Current User  : " << currentUser << endl;
-		cout << "  Home          : " << userHome << endl;
+		cout << "  Home          : " << UnchangeableUserHome << endl;
+		cout << "  Path          : " << userHome << endl;
 		cout << endl;
 		cout << "[SYSTEM]" << endl;
 		cout << "  OS Name       : " << osName << endl;
 		cout << "  Build         : " << currentBuild << endl;
 		cout << "  Kernel        : BarOS " << VersionBarOSkrnl << endl;
+		cout << "  Uptime        : " << getUptime() << endl;
 		cout << "  Safe Mode     : " << safeMode << endl;
 		cout << endl;
 		cout << "[SERVICES]" << endl;
@@ -3294,6 +3388,7 @@ void core(const string& cmd) {
 	else if (ex_c == "taskmgr") {
 		int cpu = rand() % 15 + 1;
 		cout << "[ CORE ] BarOS " << VersionBarOSkrnl << " (CPU: " << cpu << "%)" << endl;
+		cout << "[ UPTIME ] " << getUptime() << endl;
 	}
 	else if (ex_c == "events") {
 		cout << readFile(logPath) << endl;
@@ -3396,6 +3491,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 
 		userHome = sysProf;
 		currentUser = "KERNEL";
+		kernelStartTime = GetTickCount64();
 
 		if (!dirExists(configRoot)) {
 			ensureDirectories();
@@ -3757,7 +3853,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 }
 
 int main(int argc, char* argv[]) {
-	SetConsoleTitleA("ARSLANIUS 28");
+	SetConsoleTitleA("ARSLANIUS 28 SP1");
 
 	SetConsoleWidthOnly(120);
 
