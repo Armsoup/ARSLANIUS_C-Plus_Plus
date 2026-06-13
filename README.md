@@ -1,6 +1,6 @@
-# ARSLANIUS 28 On C++
+# ARSLANIUS On C++
 
-ARSLANIUS 28 On C++ is a portable console operating system ported from the original [ARSLANIUS 28](https://github.com/Armsoup/ARSLANIUS) to native C++17 (x64).
+ARSLANIUS On C++ is a portable console operating system ported from the original [ARSLANIUS](https://github.com/Armsoup/ARSLANIUS) to native C++17 (x64).
 
 PLEASE SEND YOUR IDEAS on [Telegram](https://t.me/+8FQ20tOaKI5lNGMy) or [Discussions](https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/discussions)
 
@@ -55,9 +55,9 @@ Features
 * * *
 Build numbering logic
 
-Build 58.1.0
+Build 59.1.0
 
-58 - VERSION (For example, ARSLANIUS 28 - 58.x.x)
+59 - VERSION (For example, ARSLANIUS 28 - 58.x.x)
 
 1 - STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
 
@@ -74,7 +74,7 @@ The ARSLANIUS Driver SDK allows anyone to extend the ARSLANIUS operating system 
 ### 1. Prerequisites
 
 - Microsoft Visual Studio 2019 or later (with C++ workload)
-- ARSLANIUS 28 (Build 58.2.0 or later)
+- ARSLANIUS (Build 58.2.0 or later)
 
 ### 2. Get the SDK
 
@@ -465,7 +465,7 @@ System Structure
 
 ARSLANIUS/
 
-├─ ARSLANIUS 28.exe
+├─ ARSLANIUS.exe
 
 ├─ Backup/
 
@@ -495,7 +495,7 @@ How to Run
 
 1. Copy the ARSLANIUS folder to any location.
 
-2. Launch ARSLANIUS 28.exe.
+2. Launch ARSLANIUS.exe.
 
 3. On first boot, complete OOBE (Out-Of-Box Experience) to create your user account.
 
