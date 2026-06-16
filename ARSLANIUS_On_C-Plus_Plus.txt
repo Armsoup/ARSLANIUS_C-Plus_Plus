@@ -83,10 +83,54 @@ ARSLANIUS_API g_api;
 
 using namespace std;
 
+void load_error(string_view code) {
+	if (code == "17") {
+		system("color 0f");
+		cout << "======================================================================================================================" << endl;
+		cout << "                                                ARSLANIUS BOOT MANAGER" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << endl;
+		cout << "ARSLANIUS failed to start. A recent hardware or software change might be" << endl;
+		cout << "the cause." << endl;
+		cout << endl;
+		cout << "Status: 0xc00000017" << endl;
+		cout << "Info: CRITICAL_RAM_OUTFIT" << endl;
+		cout << endl;
+		cout << "File: \\ARSLANIUS.exe" << endl;
+		cout << endl;
+		cout << "======================================================================================================================" << endl;
+		system("pause");
+		exit(1);
+	}
+	exit(1);
+}
+
+void CheckAvailableMemory() {
+	const SIZE_T TEST_SIZE = 15 * 1024 * 1024;
+	void* testMem = VirtualAlloc(NULL, TEST_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+	if (testMem == NULL) {
+		load_error("17");
+	}
+	volatile char* ptr = (volatile char*)testMem;
+	for (size_t i = 0; i < TEST_SIZE; i += 4096) {
+		ptr[i] = 0xDE;
+	}
+	VirtualFree(testMem, 0, MEM_RELEASE);
+}
+
+struct MemoryGuard {
+	MemoryGuard() {
+		CheckAvailableMemory();
+	}
+};
+
+MemoryGuard __memory_guard;
+
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "59.1.0";
+const string CURRENT_BUILD = "59.1.1";
 const string REG_VERSION = "29";
 const string EXPECTED_SYSTEM_HASH = "350703396";
 const string EXPECTED_ADMIN_HASH = "734380451";
@@ -176,30 +220,30 @@ void logonScreen();
 void loader_errors(string_view code);
 void applyColor();
 void cmdLoop();
-void print_slow(const string& text);
+void print_slow(string_view text);
 void check_AUTHORITY();
 void check_kernel();
 void check_registry();
 void check_BCD();
-void installapp(const string& app_id);
+void installapp(string_view app_id);
 void core(const string& cmd);
-bool checkHash(const string& input, const string& expectedHash);
-string calculateHash(const string& input);
+bool checkHash(string_view input, string_view expectedHash);
+string calculateHash(string_view input);
 void bsod(const string& code);
-void arslogon(const string& authority);
+void arslogon(string_view authority);
 void shutdownScreen();
 void rebootScreen();
 void interfaceScreen();
-bool fileExists(const string& path);
-bool dirExists(const string& path);
+bool fileExists(string_view path);
+bool dirExists(string_view path);
 vector<string> split(const string& s, char delimiter);
 string trim(const string& s);
 string getCurrentDateTime();
 string getUptime();
-void writeLog(const string& message);
-string readFile(const string& path);
-void writeFile(const string& path, const string& content);
-void appendFile(const string& path, const string& content);
+void writeLog(string_view message);
+string readFile(string_view path);
+void writeFile(string_view path, string_view content);
+void appendFile(string_view path, string_view content);
 void setColor(const string& colorCode);
 void SetConsoleWidthOnly(int newWidth);
 namespace fs = filesystem;
@@ -253,11 +297,11 @@ vector<string> split(const string& s, char delimiter) {
 	return tokens;
 }
 
-bool fileExists(const string& path) {
+bool fileExists(string_view path) {
 	return fs::exists(path) && fs::is_regular_file(path);
 }
 
-bool dirExists(const string& path) {
+bool dirExists(string_view path) {
 	return fs::exists(path) && fs::is_directory(path);
 }
 
@@ -271,14 +315,14 @@ string getCurrentDateTime() {
 	return string(buf);
 }
 
-void writeLog(const string& message) {
+void writeLog(string_view message) {
 	ofstream log(logPath, ios::app);
 	if (log.is_open()) {
 		log << "[" << getCurrentDateTime() << "]" << " " << message << endl;
 	}
 }
 
-string readFile(const string& path) {
+string readFile(string_view path) {
 	ifstream f(path);
 	if (!f.is_open()) return "";
 	stringstream ss;
@@ -286,7 +330,7 @@ string readFile(const string& path) {
 	return ss.str();
 }
 
-void writeFile(const string& path, const string& content) {
+void writeFile(string_view path, string_view content) {
 	ofstream f(path);
 	if (f.is_open()) {
 		f << content;
@@ -297,14 +341,14 @@ void writeFile(const string& path, const string& content) {
 	}
 }
 
-void appendFile(const string& path, const string& content) {
+void appendFile(string_view path, string_view content) {
 	ofstream f(path, ios::app);
 	if (f.is_open()) {
 		f << content;
 	}
 }
 
-string calculateHash(const string& input) {
+string calculateHash(string_view input) {
 	long long hashVal = 0;
 	const int salt = 79;
 
@@ -331,7 +375,7 @@ string calculateHash(const string& input) {
 	return to_string(hashVal);
 }
 
-bool checkHash(const string& input, const string& expectedHash) {
+bool checkHash(string_view input, string_view expectedHash) {
 	return calculateHash(input) == expectedHash;
 }
 
@@ -394,7 +438,7 @@ void loadBCD() {
 	}
 }
 
-void print_slow(const string& text) {
+void print_slow(string_view text) {
 	timeBeginPeriod(1);
 	for (char c : text) {
 		cout << c << flush;
@@ -403,7 +447,7 @@ void print_slow(const string& text) {
 	timeEndPeriod(1);
 }
 
-void installapp(const string& app_id) {
+void installapp(string_view app_id) {
 	if (app_id == "1") {
 		string appPath = programsRoot + "\\Scanner.bat";
 		stringstream app_install;
@@ -468,7 +512,7 @@ void SetConsoleWidthOnly(int newWidth) {
 
 	if (!GetConsoleScreenBufferInfo(hOut, &csbi)) return;
 
-	short currentHeight = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+	short currentHeight = 40;
 
 	COORD newBufferSize = { (short)newWidth, csbi.dwSize.Y };
 	SetConsoleScreenBufferSize(hOut, newBufferSize);
@@ -1502,6 +1546,48 @@ void bootMenu() {
 	}
 	if (setup == 1) {
 		setColor("1f");
+		cout << "======================================================================================================================" << endl;
+		cout << "                                                        " << osName << endl;
+		cout << "                                                  Copyright © 2026 Armsoup" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << endl;
+		cout << "This program is FREE SOFTWARE under the GNU AGPL - 3.0 license." << endl;
+		cout << endl;
+		cout << "You MAY:" << endl;
+		cout << " -Use it for any purpose" << endl;
+		cout << " -Modify it" << endl;
+		cout << " -Distribute it" << endl;
+		cout << endl;
+		cout << "You MUST:" << endl;
+		cout << " -Keep the original copyright notice(© Armsoup)" << endl;
+		cout << " -Disclose ALL source code(including your changes)" << endl;
+		cout << " -License your modified version under AGPL - 3.0 as well" << endl;
+		cout << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << "!WARNING!" << endl;
+		cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
+		cout << " -Your license is automatically TERMINATED" << endl;
+		cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
+		cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
+		cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
+		cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
+		cout << endl;
+		cout << "Full license: https://www.gnu.org/licenses/agpl-3.0.html" << endl;
+		cout << "or: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus?tab=AGPL-3.0-1-ov-file" << endl;
+		cout << "Type 'license' on command line to view this again" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << "You Agree?: ";
+		char choice_license = _getch();
+		choice_license = tolower(choice_license);
+		cout << choice_license << endl;
+		switch (choice_license) {
+		case 'y': {
+			clearScreen(); break;
+		}
+		case 'n': {
+			exit(1); break;
+		}
+		}
 		cout << "Welcome to OOBE " << osName << "! Do you want to start?" << endl;
 		cout << "Y/N: ";
 		char choice = _getch();
@@ -1565,7 +1651,7 @@ void bootMenu() {
 			bootMenu(); break;
 		}
 		case 'n': {
-			exit(1);
+			exit(1); break;
 		}
 		default: bootMenu();
 		}
@@ -2128,7 +2214,7 @@ void logonScreen() {
 	}
 }
 
-void arslogon(const string& authority) {
+void arslogon(string_view authority) {
 	if (authority == "authorization") {
 		check_AUTHORITY();
 		check_kernel();
@@ -2343,7 +2429,7 @@ void arslogon(const string& authority) {
 			}
 		}
 	}
-	else if (authority == "SudoAuth") {
+	if (authority == "SudoAuth") {
 		string a_p;
 		sudo_command = 0;
 		char ch;
@@ -2374,7 +2460,7 @@ void arslogon(const string& authority) {
 		}
 		return;
 	}
-	else if (authority == "SecureAS_lockmenu") {
+	if (authority == "SecureAS_lockmenu") {
 		clearScreen();
 		cout << "Secure Settings" << endl;
 		cout << endl;
@@ -2410,14 +2496,14 @@ void arslogon(const string& authority) {
 		case '6': interfaceScreen();
 		}
 	}
-	else if (authority == "waitMode") {
+	if (authority == "waitMode") {
 		clearScreen();
 		setColor("0f");
 		cout << "\n\n                                                  " << osName << "\n\n";
 		pause();
 		applyColor();
 	}
-	else if (authority == "logoutRequest") {
+	if (authority == "logoutRequest") {
 		clearScreen();
 		PlaySound(MAKEINTRESOURCE(IDR_WAVE3), GetModuleHandle(NULL), SND_RESOURCE | SND_ASYNC);
 		setColor("1f");
@@ -2441,7 +2527,7 @@ void arslogon(const string& authority) {
 			return;
 		}
 	}
-	else if (authority == "emergency_reboot") {
+	if (authority == "emergency_reboot") {
 		clearScreen();
 		setColor("5b");
 		cout << endl;
@@ -2452,17 +2538,15 @@ void arslogon(const string& authority) {
 		Sleep(1000);
 		bsod("DIED");
 	}
-	else {
-		clearScreen();
-		setColor("5b");
-		cout << endl;
-		cout << endl;
-		cout << "                                                 Please Wait..." << endl;
-		Sleep(2000);
-		cout << "                                 ERROR: Session active, terminating ArsLogon..." << endl;
-		Sleep(1500);
-		bsod("DIED");
-	}
+	clearScreen();
+	setColor("5b");
+	cout << endl;
+	cout << endl;
+	cout << "                                                 Please Wait..." << endl;
+	Sleep(2000);
+	cout << "                                 ERROR: Session active, terminating ArsLogon..." << endl;
+	Sleep(1500);
+	bsod("DIED");
 }
 
 
@@ -2791,7 +2875,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "GUEST") {
 		bool allowed = false;
-		vector<string> guestCmds = { "help", "lock", "confeditor", "hibernate", "wait_mode", "echo", "ls", "cd",
+		vector<string> guestCmds = { "help", "lock", "license", "confeditor", "hibernate", "wait_mode", "echo", "ls", "cd",
 									 "lockmenu", "report", "cls", "ver", "whoami",
 									 "calc", "notepad", "reboot", "shutdown" };
 		for (const string& c : guestCmds) {
@@ -2817,7 +2901,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
 		bool allowed = false;
-		vector<string> tiCmds = { "help", "mv", "bcdboot", "hibernate", "cp", "rm", "touch", "edit",
+		vector<string> tiCmds = { "help", "mv", "bcdboot", "license", "hibernate", "cp", "rm", "touch", "edit",
 								  "echo", "bcdedit", "mkdir", "ls", "cd", "cat", "ren",
 								  "reset", "reboot_to_recovery", "cls", "ver", "whoami",
 								  "events", "sfc", "adduser", "deluser", "regedit",
@@ -2833,7 +2917,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\SysPulse") {
 		bool allowed = false;
-		vector<string> spCmds = { "help", "ls", "sysinfo", "hibernate", "events", "report", "echo",
+		vector<string> spCmds = { "help", "ls", "sysinfo", "license", "hibernate", "events", "report", "echo",
 								  "taskmgr", "cd", "cat", "reboot", "shutdown",
 								  "reboot_to_recovery", "cls", "ver", "whoami" };
 		for (const string& c : spCmds) {
@@ -2847,7 +2931,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\NetMonitor") {
 		bool allowed = false;
-		vector<string> nmCmds = { "help", "reboot", "ping", "hibernate", "netstat", "ipconfig",
+		vector<string> nmCmds = { "help", "reboot", "ping", "license", "hibernate", "netstat", "ipconfig",
 								  "echo", "tracert", "nslookup", "arp", "route",
 								  "shutdown", "cls", "whoami" };
 		for (const string& c : nmCmds) {
@@ -2861,7 +2945,7 @@ void core(const string& cmd) {
 
 	if (safeMode == 1) {
 		bool allowed = false;
-		vector<string> safeCmds = { "help", "lock", "wait_mode", "hibernate", "lockmenu", "mv", "cp",
+		vector<string> safeCmds = { "help", "lock", "wait_mode", "license", "hibernate", "lockmenu", "mv", "cp",
 									"echo", "bcdboot", "bcdedit", "rm", "touch", "mkdir",
 									"ls", "cd", "cat", "ren", "backup", "backup-restore",
 									"sysinfo", "reset", "reboot_to_recovery", "report",
@@ -2879,7 +2963,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "confeditor", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -2908,7 +2992,7 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		sudo_command == 0) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "confeditor", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "confeditor", "license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -2926,7 +3010,7 @@ void core(const string& cmd) {
 	}
 
 	if (ex_c == "help" || ex_c == "?") {
-		cout << "Apps: Notepad, Calc, taskmgr, confeditor, edit, install, regedit, ArsStore, sysinfo" << endl;
+		cout << "Apps: Notepad, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo" << endl;
 		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun" << endl;
 		cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
@@ -2962,6 +3046,38 @@ void core(const string& cmd) {
 		else {
 			cout << "[ INFO ] No mail." << endl;
 		}
+	}
+	else if (ex_c == "license") {
+		cout << "======================================================================================================================" << endl;
+		cout << "                                                        " << osName << endl;
+		cout << "                                                  Copyright © 2026 Armsoup" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << endl;
+		cout << "This program is FREE SOFTWARE under the GNU AGPL - 3.0 license." << endl;
+		cout << endl;
+		cout << "You MAY:" << endl;
+		cout << " -Use it for any purpose" << endl;
+		cout << " -Modify it" << endl;
+		cout << " -Distribute it" << endl;
+		cout << endl;
+		cout << "You MUST:" << endl;
+		cout << " -Keep the original copyright notice(© Armsoup)" << endl;
+		cout << " -Disclose ALL source code(including your changes)" << endl;
+		cout << " -License your modified version under AGPL - 3.0 as well" << endl;
+		cout << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << "!WARNING!" << endl;
+		cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
+		cout << " -Your license is automatically TERMINATED" << endl;
+		cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
+		cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
+		cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
+		cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
+		cout << endl;
+		cout << "Full license: https://www.gnu.org/licenses/agpl-3.0.html" << endl;
+		cout << "or: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus?tab=AGPL-3.0-1-ov-file" << endl;
+		cout << "Type 'license' on command line to view this again" << endl;
+		cout << "======================================================================================================================" << endl;
 	}
 	else if (ex_c == "mail-send") {
 		string m_to, m_text;
@@ -3373,7 +3489,7 @@ void core(const string& cmd) {
 		if (autorun.empty()) autorun = "1";
 
 		stringstream config;
-		config << "LOGOUT_TIMEOEUT=" << logoutTimeout << endl;
+		config << "LOGOUT_TIMEOUT=" << logoutTimeout << endl;
 		config << "USER_DEFAULT_HOME=" << defaultuserHome << endl;
 		config << "COLOR=" << color_user << endl;
 		config << "ENABLE_AUTORUN=" << autorun << endl;
@@ -3870,7 +3986,7 @@ void rebootScreen() {
 
 void BarOSkrnl(string_view Kernel_mode) {
 	if (Kernel_mode == "initPath") {
-		VersionBarOSkrnl = "24.0";
+		VersionBarOSkrnl = "24.1";
 		char buffer[MAX_PATH];
 		GetModuleFileNameA(NULL, buffer, MAX_PATH);
 		string_view exePath(buffer);
@@ -4253,7 +4369,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 }
 
 int main(int argc, char* argv[]) {
-	SetConsoleTitleA("ARSLANIUS 29 Beta 1");
+	SetConsoleTitleA("ARSLANIUS 29 Beta 2");
 
 	SetConsoleWidthOnly(120);
 
