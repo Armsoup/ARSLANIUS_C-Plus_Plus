@@ -42,7 +42,7 @@ Features
 
 • Full event logging (system.log)
 
-• 14 BSOD (Blue Screen of Death) types with stop codes
+• 20 BSOD (Blue Screen of Death) types with stop codes
 
 • Integrity protection — hash checks, file size limits, config structure validation on every boot
 
@@ -471,7 +471,7 @@ ARSLANIUS/
 
 ├─ Settings And System Files/
 
-│⠀├─ kernel.dll
+│⠀├─ SAM
 
 │⠀├─ REG.cfg
 
