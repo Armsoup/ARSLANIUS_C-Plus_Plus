@@ -21,6 +21,7 @@
 #include <psapi.h>
 #include <functional>
 #include <winternl.h>
+#include <random>
 #include "resource.h"
 #include "miniz.h"
 #include "arslanius.h"
@@ -44,7 +45,7 @@ typedef struct _PEB64 {
 	DWORD PostProcessInitRoutine;
 	DWORD Reserved5[128];
 	DWORD SessionId;
-} PEB64, * PPEB64;
+} PEB64, *PPEB64;
 
 #define GetPeb() ((PPEB64)__readgsqword(0x60))
 
@@ -115,7 +116,7 @@ MemoryGuard __memory_guard;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "60.1.0";
+const string CURRENT_BUILD = "60.1.2";
 const string REG_VERSION = "30";
 const string OS_NAME_DEFAULT = "ARSLANIUS 30";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
@@ -164,7 +165,6 @@ int fastBoot = 1;
 string REG_VERSION_FOUND = "0";
 int setup = 0;
 int system_hash_found = 0;
-int admin_hash_found = 0;
 int sudo_command = 0;
 int lockdown = 0;
 int loginAttempts = 0;
@@ -221,6 +221,7 @@ void arslogon(string_view authority);
 void shutdownScreen();
 void rebootScreen();
 void interfaceScreen();
+int getrand(int min, int max);
 bool fileExists(string_view path);
 bool dirExists(string_view path);
 vector<string> split(const string& s, char delimiter);
@@ -244,6 +245,13 @@ string trim(const string& s) {
 	if (start == string::npos) return "";
 	size_t end = s.find_last_not_of(" \t\r\n");
 	return s.substr(start, end - start + 1);
+}
+
+int getrand(int min, int max) {
+	static random_device rd;
+	static mt19937 gen(rd());
+	uniform_int_distribution<> dist(min, max);
+	return dist(gen);
 }
 
 string getUptime() {
@@ -466,7 +474,6 @@ void print_slow(string_view text) {
 }
 
 void BSOD_Runner() {
-	srand((unsigned)time(NULL));
 	const int H = 10, W = 20;
 	char field[H][W];
 	int files = 15, score = 0, level = 1;
@@ -479,8 +486,8 @@ void BSOD_Runner() {
 	for (int i = 0; i < files; i++) {
 		int x, y;
 		do {
-			x = rand() % W;
-			y = rand() % H;
+			x = getrand(0, W);
+			y = getrand(0, H);;
 		} while ((x == px && y == py) || field[y][x] == 'F');
 		field[y][x] = 'F';
 	}
@@ -495,8 +502,8 @@ void BSOD_Runner() {
 		if (chrono::duration_cast<chrono::seconds>(now - lastSpawn).count() >= spawnInterval) {
 			int x, y, attempts = 0;
 			do {
-				x = rand() % W;
-				y = rand() % H;
+				x = getrand(0, W);
+				y = getrand(0, H);
 				attempts++;
 			} while ((field[y][x] != '.' || (x == px && y == py)) && attempts < 100);
 			if (field[y][x] == '.') {
@@ -2283,7 +2290,7 @@ void arslogon(string_view authority) {
 				}
 			}
 			if (currentUser.find("BarOS SERVICE") == 0) {
-				cout << "[ ERROR ] Seriously? You decided to join the " << osName << " service? Hahahaha" << endl;
+				cout << "[ ERROR ] Login for service accounts is prohibited." << endl;
 				pause();
 				if (requestFromResume == 0) {
 					logonScreen();
@@ -2458,11 +2465,11 @@ void arslogon(string_view authority) {
 		cout << ch << endl;
 		switch (ch) {
 		case '1': acpiRequest = 0; arslogon("logoutRequest"); break;
-		case '2': core("passwd"); break;
+		case '2': core("passwd"); cmdLoop(); break;
 		case '3': acpiRequest = 1; arslogon("logoutRequest"); break;
 		case '4': acpiRequest = 2; arslogon("logoutRequest"); break;
-		case '5': core("help"); break;
-		case '6': interfaceScreen();
+		case '5': core("help"); cmdLoop(); break;
+		case '6': interfaceScreen(); break;
 		}
 	}
 	if (authority == "waitMode") {
@@ -2507,18 +2514,16 @@ void arslogon(string_view authority) {
 		Sleep(1000);
 		bsod("DIED");
 	}
-	clearScreen();
-	setColor("5b");
-	cout << endl;
-	cout << endl;
-	cout << "                                                 Please Wait..." << endl;
-	Sleep(2000);
-	cout << "                                 ERROR: Session active, terminating ArsLogon..." << endl;
-	Sleep(1500);
-	bsod("DIED");
+	if (authority != "authorization" || authority != "SudoAuth" || authority != "SecureAS_lockmenu" || authority != "waitMode" || authority != "logoutRequest" || authority != "emergency_reboot") {
+		clearScreen();
+		setColor("5b");
+		cout << endl;
+		cout << endl;
+		cout << "                                                 Please Wait..." << endl;
+		Sleep(600000);
+		bsod("DIED");
+	}
 }
-
-
 
 void applyColor() {
 	string color;
@@ -2680,7 +2685,7 @@ void cmdLoop() {
 				}
 			}
 			if (fileExists(sysServices + "\\SysPulse.active")) {
-				int PulseCheck = rand() % 10;
+				int PulseCheck = getrand(0, 10);
 				if (PulseCheck == 5) {
 					writeLog("BarOS SERVICE\\SYSPULSE: System Health OK");
 				}
@@ -2699,9 +2704,9 @@ void cmdLoop() {
 				}
 			}
 			if (fileExists(sysServices + "\\NetMonitor.active")) {
-				int NetCheck = rand() % 10;
+				int NetCheck = getrand(0, 10);
 				if (NetCheck == 5) {
-					string host = "github.com";
+					string host = "w3.org";
 					string NetCheckS = "ping -n 1 " + host + " >nul 2>&1";
 					int NetCheckResult = system(NetCheckS.c_str());
 					if (NetCheckResult != 0) {
@@ -2964,7 +2969,7 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		sudo_command == 0) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "game.bsodrunner", "confeditor", "license", "as - pack", "hibernate", "as - unpack", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "game.bsodrunner", "confeditor", "license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -3492,8 +3497,9 @@ void core(const string& cmd) {
 			catch (const fs::filesystem_error& e) {
 				bsod("");
 			}
-			pause();
+			Sleep(3000);
 			acpiRequest = 1;
+			fastBoot = 0;
 			shutdownScreen();
 		}
 		else {
@@ -3894,7 +3900,7 @@ void core(const string& cmd) {
 		cout << "[ DONE ] Registry updated." << endl;
 	}
 	else if (ex_c == "taskmgr") {
-		int cpu = rand() % 15 + 1;
+		int cpu = getrand(0, 15);
 		cout << "[ CORE ] BarOS " << VersionBarOSkrnl << " (CPU: " << cpu << "%)" << endl;
 		cout << "[ UPTIME ] " << getUptime() << endl;
 	}
@@ -4473,9 +4479,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 }
 
 int main(int argc, char* argv[]) {
-	srand(static_cast<unsigned int>(time(0)));
-
-	SetConsoleTitleA("ARSLANIUS 30 Beta 1");
+	SetConsoleTitleA("ARSLANIUS 30 Beta 3");
 
 	SetConsoleWidthOnly(120);
 
