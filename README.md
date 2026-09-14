@@ -46,7 +46,7 @@ Features
 
 • 20 BSOD (Blue Screen of Death) types with stop codes
 
-• Integrity protection — hash checks, file size limits, config structure validation on every boot
+• Integrity protection — SHA-256, Antihack, file size limits, config structure validation on every boot
 
 • Lockdown mode — blocks all logins until OOBE is completed
 
@@ -331,7 +331,7 @@ Then restart ARSLANIUS and type sdk.demo.
 
 ---
 
-API Reference
+### API Reference
 
 Commands & Shell
 
@@ -341,7 +341,7 @@ void unregister_command(const char* name);
 void execute_command(const char* cmd);
 ```
 
-Console Output
+### Console Output
 
 ```cpp
 void print(const char* text);
@@ -359,7 +359,7 @@ void write_registry(const char* key, const char* value);
 void delete_registry(const char* key);
 ```
 
-File System
+### File System
 
 ```cpp
 bool file_exists(const char* path);
@@ -371,7 +371,7 @@ bool delete_file(const char* path);
 bool create_directory(const char* path);
 ```
 
-System
+### System
 
 ```cpp
 void write_log(const char* message);
@@ -386,7 +386,7 @@ const char* get_users_path();
 const char* get_drivers_path();
 ```
 
-Security
+### Security
 
 ```cpp
 const char* calculate_hash(const char* input);
@@ -395,7 +395,7 @@ bool user_exists(const char* username);
 
 ---
 
-Driver Structure
+### Driver Structure
 
 Every driver must export this function:
 
@@ -405,7 +405,7 @@ extern "C" __declspec(dllexport) int asd_init(ARSLANIUS_API* api);
 
 It receives the API table and returns 0 on success.
 
-Minimal driver example:
+### Minimal driver example:
 
 ```cpp
 #include <windows.h>
@@ -428,8 +428,7 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD r, LPVOID lp) { return TRUE; }
 ```
 
 ---
-
-File Extensions
+### File Extensions
 
 Extension Purpose
 
@@ -441,7 +440,7 @@ arslanius.h SDK header file
 
 ---
 
-Troubleshooting
+### Troubleshooting
 
 Driver not loading (0 loaded, 0 failed):
 
@@ -460,6 +459,51 @@ Commands not working after loading:
 · Ensure command names are lowercase and contain no spaces.
 
 · Check that asd_init returned 0.
+
+* * *
+
+## ARSLAN-SCRIPT
+
+Arslan-Script is a built-in scripting language for ARSLANIUS, 
+inspired by the original 19th version of the batch project.
+
+### Quick Start
+
+  as-interpreter
+  Enter filename: my_script.as
+
+### Example
+```text
+  var wh = 1
+  while wh = 1
+      print "Hello! "
+      input name
+      print_f "Hi, " + name
+      end
+  endwhile
+```
+
+### Features
+
+  - print / print_f — output
+  - input / getch — input
+  - var / calc — variables and math
+  - if / #endif — conditionals
+  - while / endwhile — loops
+  - end — exit script
+  - wakeupvar — keep variable in RAM longer
+  - RAM with TTL (30 min) and garbage collector
+
+---
+
+### Drivers vs Scripts
+
+	                               Drivers (.asd)	                     Scripts (.as)
+      Access	           Full (WinAPI, files, registry)	      Sandboxed (fake_ram only)
+      On crash	                     BSoD 0x15	                     try/catch, ОС alive
+      Autoload	                         Yes	                             No
+      Can register commands              Yes	                             No
+      Entry level               	C++, x64 compiler	                10 commands
 
 * * *
 
