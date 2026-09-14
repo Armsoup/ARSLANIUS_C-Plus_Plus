@@ -476,13 +476,13 @@ inspired by the original 19th version of the batch project.
 ```text
 var wh = 1
 while wh = 1
-    print "Hello! "
+    print "Hello! Enter your name: "
     input name
+	print_f ""
     print "Hi, "
     print_f name
-    if name = "q"
-    end
-    #endif
+	pause
+	end
 endwhile
 ```
 
