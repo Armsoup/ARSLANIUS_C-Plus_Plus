@@ -501,12 +501,56 @@ endwhile
 
 ### Drivers vs Scripts
 
-	                               Drivers (.asd)	                     Scripts (.as)
+	  Feature                       Drivers (.asd)	                     Scripts (.as)
       Access	           Full (WinAPI, files, registry)	      Sandboxed (fake_ram only)
-      On crash	                     BSoD 0x15	                     try/catch, ОС alive
+      On crash	                     BSoD 0x15	                     try/catch, ОS alive
       Autoload	                         Yes	                             No
       Can register commands              Yes	                             No
       Entry level               	C++, x64 compiler	                10 commands
+
+* * *
+# General Features
+## Hibernation and Fast Boot
+
+ARSLANIUS supports full session hibernation:
+
+- **hibernate** — saves current session to `hibernate.sys` and exits
+- On next boot — prompts to resume
+- Password is required to resume
+- If user was deleted from SAM during hibernation → BSoD 0x18
+### If "FAST_BOOT=1", the system automatically enters hibernation upon shutdown.
+
+## Hotkeys
+
+|        Key         |                                       Action                                       |
+|--------------------|------------------------------------------------------------------------------------|
+|   **Ctrl+Alt+K**   |      Kernel hot-reload. Re-reads BCD/REG, reloads all drivers, keeps session.      |
+| **Ctrl+Alt+Shift** | Secure Attention Sequence (like Ctrl+Alt+Del in Windows). Opens SecureAS lockmenu. |
+
+## BSoD Reference
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0x1a | CONFIG_ROOT_NOT_FOUND | Settings folder missing |
+| 0x1 | KERNEL_NOT_FOUND | SAM file missing |
+| 0x2 | SYSTEM_ACCOUNT_HASH_MISMATCH | SYSTEM hash wrong |
+| 0x3 | REGISTRY_VERSION_MISMATCH | REG_VERSION wrong |
+| 0x4 | REGISTRY_NOT_FOUND | REG.cfg missing |
+| 0x5 | RESERVED_USERNAME_DETECTED | BarOS AUTHORITY in SAM |
+| 0x6 | CRITICAL_STRUCTURE_CORRUPTION | Debugger detected |
+| 0x7 | BAD_SYSTEM_CONFIG_INFO | REG.cfg incomplete |
+| 0x8 | KERNEL_INCOMPLETE | SYSTEM/ADMIN missing |
+| 0x9 | LOGON_ATTACK_DETECTED | 10 failed logins |
+| 0x10 | KERNEL_LOCKED | SAM > 12 KB |
+| 0x11 | REGISTRY_LOCKED | REG.cfg > 2 KB |
+| 0x12 | LOG_OVERFLOW | system.log > 150 KB |
+| 0x13 | BCD_CORRUPTED | BCD incomplete |
+| 0x14 | BCD_NOT_FOUND | BCD missing |
+| 0x15 | DRIVER_CRITICAL_FAILURE | Driver returned BAROS_CRITICAL |
+| 0x16 | CRITICAL_KERNEL_ERROR | General kernel error |
+| 0x18 | RESUME_USER_NOT_FOUND | Hibernate user deleted |
+| DIED | CRITICAL_PROCESS_DIED | ArsLogon died |
+| 666 | MANUAL_CRASH | User typed `bsod` |
 
 * * *
 
