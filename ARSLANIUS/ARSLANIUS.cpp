@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <psapi.h>
 #include <functional>
+#include <mutex>
+#include <stack>
 #include <winternl.h>
 #include <random>
 #include "resource.h"
@@ -45,7 +47,7 @@ typedef struct _PEB64 {
 	DWORD PostProcessInitRoutine;
 	DWORD Reserved5[128];
 	DWORD SessionId;
-} PEB64, *PPEB64;
+} PEB64, * PPEB64;
 
 #define GetPeb() ((PPEB64)__readgsqword(0x60))
 
@@ -67,6 +69,13 @@ typedef NTSTATUS(NTAPI* NtReadVirtualMemory_t)(
 typedef NTSTATUS(NTAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
 
 NtReadVirtualMemory_t OriginalNtReadVirtualMemory = NULL;
+
+struct RAM_Cell {
+	string value;
+	chrono::steady_clock::time_point last_access;
+};
+map<string, RAM_Cell> fake_ram;
+mutex ram_mutex;
 
 void load_error(string_view code) {
 	if (code == "17") {
@@ -116,7 +125,7 @@ MemoryGuard __memory_guard;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "60.1.2";
+const string CURRENT_BUILD = "60.1.4";
 const string REG_VERSION = "30";
 const string OS_NAME_DEFAULT = "ARSLANIUS 30";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
@@ -191,6 +200,7 @@ string regKey = "SYSTEM_COLOR";
 // FORWARD DECLARATIONS
 // =====================================================================
 void BarOSkrnl(string_view Kernel_mode);
+void pause();
 void loadBCD();
 void saveBCD();
 void bootMenu();
@@ -234,6 +244,14 @@ void writeFile(const string& path, string_view content);
 void appendFile(const string& path, string_view content);
 void setColor(const string& colorCode);
 void SetConsoleWidthOnly(int newWidth);
+void print(string_view text);
+string formatDouble(double value);
+void garbage_collector();
+double evaluateWithVars(const string& expr, size_t& pos);
+void wait(int timeout);
+bool evaluateStringCondition(const string& expr);
+void executeLine(const string& line);
+void runScript(const string& path);
 namespace fs = filesystem;
 
 // =====================================================================
@@ -340,6 +358,496 @@ void appendFile(const string& path, string_view content) {
 	ofstream f(path, ios::app);
 	if (f.is_open()) {
 		f << content;
+	}
+}
+void print(string_view text) {
+	cout << text;
+}
+
+string formatDouble(double value) {
+	ostringstream oss;
+	oss.imbue(locale::classic());
+	oss << value;
+	return oss.str();
+}
+
+void garbage_collector() {
+	while (true) {
+		this_thread::sleep_for(chrono::minutes(30));
+		auto now = chrono::steady_clock::now();
+
+		lock_guard<mutex> lock(ram_mutex);
+		for (auto it = fake_ram.begin(); it != fake_ram.end(); ) {
+			auto duration = chrono::duration_cast<chrono::minutes>(now - it->second.last_access).count();
+			if (duration >= 30) {
+				it = fake_ram.erase(it);
+			}
+			else {
+				++it;
+			}
+		}
+	}
+}
+
+double evaluateWithVars(const string& expr, size_t& pos) {
+	stack<double> values;
+	stack<char> ops;
+
+	auto applyOp = [&]() {
+		if (values.size() < 2 || ops.empty()) {
+			while (!ops.empty()) ops.pop();
+			return;
+		}
+		double b = values.top(); values.pop();
+		double a = values.top(); values.pop();
+		char op = ops.top(); ops.pop();
+		switch (op) {
+		case '+': values.push(a + b); break;
+		case '-': values.push(a - b); break;
+		case '*': values.push(a * b); break;
+		case '/': values.push(b != 0 ? a / b : 0.0); break;
+		case '%': values.push(b != 0 ? (int)a % (int)b : 0); break;
+		case '>': values.push(a > b ? 1.0 : 0.0); break;
+		case '<': values.push(a < b ? 1.0 : 0.0); break;
+		case '=': values.push(a == b ? 1.0 : 0.0); break;
+		case '!': values.push(a != b ? 1.0 : 0.0); break;
+		}
+		};
+
+	auto precedence = [](char op) {
+		if (op == '>' || op == '<' || op == '=' || op == '!') return 1;
+		if (op == '+' || op == '-') return 2;
+		if (op == '*' || op == '/' || op == '%') return 3;
+		return 0;
+		};
+
+	while (pos < expr.length()) {
+		char c = expr[pos];
+
+		if (isspace(c)) { pos++; continue; }
+
+		if (isdigit(c) || c == '.') {
+			string num;
+			while (pos < expr.length() && (isdigit(expr[pos]) || expr[pos] == '.')) {
+				num += expr[pos++];
+			}
+			values.push(stod(num));
+			continue;
+		}
+
+		if (isalpha(c) || c == '_') {
+			string varName;
+			while (pos < expr.length() && (isalnum(expr[pos]) || expr[pos] == '_')) {
+				varName += expr[pos++];
+			}
+
+			double varValue = 0.0;
+			bool is_found = false;
+
+			{
+				lock_guard<mutex> lock(ram_mutex);
+				auto it = fake_ram.find(varName);
+				if (it != fake_ram.end()) {
+					is_found = true;
+					it->second.last_access = chrono::steady_clock::now();
+					try {
+						varValue = stod(it->second.value);
+					}
+					catch (...) {
+						varValue = 0.0;
+					}
+				}
+			}
+
+			if (is_found) {
+				values.push(varValue);
+			}
+			else {
+				cout << "[ ERROR ] Variable not found: " << varName << endl;
+				values.push(0.0);
+			}
+			continue;
+		}
+
+		if (c == '(') {
+			pos++;
+			values.push(evaluateWithVars(expr, pos));
+			if (pos < expr.length() && expr[pos] == ')') pos++;
+			continue;
+		}
+
+		if (c == ')') {
+			pos++;
+			while (!ops.empty()) applyOp();
+			return values.empty() ? 0.0 : values.top();
+		}
+
+		if (strchr("+-*/%><=!", c)) {
+			while (!ops.empty() && precedence(ops.top()) >= precedence(c)) {
+				applyOp();
+			}
+			ops.push(c);
+			pos++;
+			continue;
+		}
+
+		pos++;
+	}
+
+	while (!ops.empty()) applyOp();
+	return values.empty() ? 0.0 : values.top();
+}
+
+void wait(int timeout) {
+	Sleep(timeout * 1000);
+}
+
+bool evaluateStringCondition(const string& expr) {
+	string clean_expr = trim(expr);
+
+	char op = 0;
+	size_t op_pos = string::npos;
+
+	if ((op_pos = clean_expr.find('=')) != string::npos) op = '=';
+	else if ((op_pos = clean_expr.find('!')) != string::npos) op = '!';
+	else if ((op_pos = clean_expr.find('>')) != string::npos) op = '>';
+	else if ((op_pos = clean_expr.find('<')) != string::npos) op = '<';
+
+	if (op_pos == string::npos) {
+		size_t pos = 0;
+		return evaluateWithVars(clean_expr, pos) != 0.0;
+	}
+
+	string left = trim(clean_expr.substr(0, op_pos));
+	string right = trim(clean_expr.substr(op_pos + 1));
+
+	auto resolveValue = [](const string& part) -> string {
+		if (part.size() >= 2 && part.front() == '"' && part.back() == '"') {
+			return part.substr(1, part.size() - 2);
+		}
+		lock_guard<mutex> lock(ram_mutex);
+		if (fake_ram.find(part) != fake_ram.end()) {
+			fake_ram[part].last_access = chrono::steady_clock::now();
+			return fake_ram[part].value;
+		}
+		return part;
+		};
+
+	string left_val = resolveValue(left);
+	string right_val = resolveValue(right);
+	try {
+		size_t p1, p2;
+		double num_left = stod(left_val, &p1);
+		double num_right = stod(right_val, &p2);
+		if (p1 == left_val.size() && p2 == right_val.size()) {
+			switch (op) {
+			case '=': return num_left == num_right;
+			case '!': return num_left != num_right;
+			case '>': return num_left > num_right;
+			case '<': return num_left < num_right;
+			}
+		}
+	}
+	catch (...) {}
+
+	switch (op) {
+	case '=': return left_val == right_val;
+	case '!': return left_val != right_val;
+	case '>': return left_val > right_val;
+	case '<': return left_val < right_val;
+	}
+
+	return false;
+}
+
+struct ScriptEnd {};
+void executeLine(const string& line) {
+	string trimmed = trim(line);
+
+	size_t inline_comment = trimmed.find("//");
+	if (inline_comment == string::npos) inline_comment = trimmed.find('#');
+	if (inline_comment != string::npos) {
+		trimmed = trim(trimmed.substr(0, inline_comment));
+	}
+
+	if (trimmed.empty()) return;
+
+	size_t space_pos = trimmed.find(' ');
+	string command = (space_pos == string::npos) ? trimmed : trimmed.substr(0, space_pos);
+	string args = (space_pos == string::npos) ? "" : trim(trimmed.substr(space_pos + 1));
+
+	if (command == "print") {
+		string target = trim(args);
+
+		if (target != "\"\\n\"" && !target.empty() && target.front() == '"' && target.back() == '"') {
+			target = target.substr(1, target.length() - 2);
+			print(target);
+			cout << flush;
+		}
+		else {
+			lock_guard<mutex> lock(ram_mutex);
+			if (target != "\"\\n\"" && fake_ram.find(target) != fake_ram.end()) {
+				fake_ram[target].last_access = chrono::steady_clock::now();
+				cout << fake_ram[target].value << flush;
+			}
+			else if (target == "\"\\n\"") {
+				cout << "\n";
+			}
+		}
+	}
+	else if (command == "pause") {
+		pause();
+	}
+	else if (command == "print_f") {
+		string target = trim(args);
+
+		if (target != "\"\\n\"" && !target.empty() && target.front() == '"' && target.back() == '"') {
+			target = target.substr(1, target.length() - 2);
+			print(target);
+			cout << endl;
+		}
+		else {
+			lock_guard<mutex> lock(ram_mutex);
+			if (target != "\"\\n\"" && fake_ram.find(target) != fake_ram.end()) {
+				fake_ram[target].last_access = chrono::steady_clock::now();
+				cout << fake_ram[target].value << endl;
+			}
+			else if (target == "\"\\n\"") {
+				cout << "\n";
+			}
+		}
+	}
+	else if (command == "input") {
+		string expr = trim(args);
+		string varName = expr;
+		size_t eqPos = expr.find('=');
+		if (eqPos != string::npos) {
+			varName = trim(expr.substr(0, eqPos));
+		}
+
+		if (!varName.empty()) {
+			string user_input;
+			getline(cin, user_input);
+
+			lock_guard<mutex> lock(ram_mutex);
+			fake_ram[varName] = { user_input, chrono::steady_clock::now() };
+		}
+	}
+	else if (command == "getch") {
+		string expr = trim(args);
+		string varName = expr;
+		size_t eqPos = expr.find('=');
+		if (eqPos != string::npos) {
+			varName = trim(expr.substr(0, eqPos));
+		}
+
+		if (!varName.empty()) {
+			char TEMP = _getch();
+
+			lock_guard<mutex> lock(ram_mutex);
+			fake_ram[varName] = { string(1, TEMP), chrono::steady_clock::now() };
+		}
+	}
+	else if (command == "wakeupvar") { // This command is needed because the GC clears variables every 30 minutes; so, instead of writing `print x`, write `wakeupvar x`.
+		string target = trim(args);
+		lock_guard<mutex> lock(ram_mutex);
+		auto it = fake_ram.find(target);
+		if (it == fake_ram.end()) {
+			cout << "[ Arslan-Script ERROR ] Variable not found: " << target << endl;
+		}
+		else {
+			it->second.last_access = chrono::steady_clock::now();
+		}
+	}
+	else if (command == "calc") {
+		try {
+			string expr = args;
+			size_t eqPos = expr.find('=');
+			if (eqPos != string::npos) {
+				string varName = trim(expr.substr(0, eqPos));
+				string valueExpr = trim(expr.substr(eqPos + 1));
+
+				size_t pos = 0;
+				double result = evaluateWithVars(valueExpr, pos);
+
+				lock_guard<mutex> lock(ram_mutex);
+				fake_ram[varName] = { formatDouble(result), chrono::steady_clock::now() };
+			}
+			else {
+				size_t pos = 0;
+				evaluateWithVars(expr, pos);
+			}
+		}
+		catch (const exception& e) {
+			cout << "[ ERROR ] Calc error: " << e.what() << endl;
+		}
+	}
+	else if (command == "wait") {
+		int timeout = args.empty() ? 0 : stoi(args);
+		wait(timeout);
+	}
+	else if (command == "var") {
+		size_t eq_pos = args.find('=');
+		if (eq_pos != string::npos) {
+			string var_name = trim(args.substr(0, eq_pos));
+			string var_val = trim(args.substr(eq_pos + 1));
+
+			if (!var_val.empty() && var_val.front() == '"' && var_val.back() == '"') {
+				var_val = var_val.substr(1, var_val.length() - 2);
+			}
+
+			lock_guard<mutex> lock(ram_mutex);
+			fake_ram[var_name] = { var_val, chrono::steady_clock::now() };
+		}
+	}
+	else if (command == "end") {
+		throw ScriptEnd{};
+	}
+	else {
+		cout << "[ Arslan-Script ERROR ] Unknown command: " << command << endl;
+	}
+}
+
+bool skip_execution = false;
+
+void runScript(const string& path) {
+	if (!fileExists(path)) {
+		cout << "[ ERROR ] Script file not found: " << path << endl;
+		return;
+	}
+
+	ifstream file(path);
+	vector<string> lines;
+	string line;
+
+	while (getline(file, line)) {
+		lines.push_back(line);
+	}
+
+	size_t i = 0;
+	try {
+		while (i < lines.size()) {
+			string trimmed = trim(lines[i]);
+
+			size_t inline_comment = trimmed.find("//");
+			if (inline_comment == string::npos) inline_comment = trimmed.find('#');
+			if (inline_comment != string::npos) {
+				trimmed = trim(trimmed.substr(0, inline_comment));
+			}
+
+			if (trimmed.empty()) {
+				i++;
+				continue;
+			}
+
+			size_t space_pos = trimmed.find(' ');
+			string command = (space_pos == string::npos) ? trimmed : trimmed.substr(0, space_pos);
+			string args = (space_pos == string::npos) ? "" : trim(trimmed.substr(space_pos + 1));
+
+			if (command == "#endif") {
+				skip_execution = false;
+				i++;
+				continue;
+			}
+
+			if (skip_execution) {
+				i++;
+				continue;
+			}
+
+			if (command == "while") {
+				size_t pos = 0;
+				bool condition = evaluateStringCondition(args);
+
+				size_t start = i + 1;
+				size_t end = start;
+				int depth = 1;
+
+				while (end < lines.size() && depth > 0) {
+					string check = trim(lines[end]);
+					if (check.find("while") == 0) depth++;
+					else if (check.find("endwhile") == 0) depth--;
+					if (depth > 0) end++;
+				}
+
+				if (depth != 0) {
+					cout << "[ ERROR ] endwhile not found for while at line " << i << endl;
+					return;
+				}
+
+				size_t block_start = i;
+				size_t block_end = end;
+
+				while (true) {
+					size_t new_pos = 0;
+					if (!evaluateStringCondition(args)) break;
+
+					bool old_skip = skip_execution;
+
+					for (size_t j = start; j < end; j++) {
+						string block_line = trim(lines[j]);
+
+						size_t block_comment = block_line.find("//");
+						if (block_comment == string::npos) block_comment = block_line.find('#');
+						if (block_comment != string::npos) {
+							block_line = trim(block_line.substr(0, block_comment));
+						}
+
+						if (block_line.empty()) continue;
+
+						size_t block_space = block_line.find(' ');
+						string block_cmd = (block_space == string::npos) ? block_line : block_line.substr(0, block_space);
+						string block_args = (block_space == string::npos) ? "" : trim(block_line.substr(block_space + 1));
+
+						if (block_cmd == "if") {
+							size_t if_pos = 0;
+							if (!evaluateStringCondition(block_args)) {
+								int if_depth = 1;
+								while (j < end && if_depth > 0) {
+									j++;
+									string check = trim(lines[j]);
+									if (check.find("if") == 0) if_depth++;
+									else if (check.find("#endif") == 0) if_depth--;
+								}
+							}
+							continue;
+						}
+
+						if (block_cmd == "#endif") {
+							continue;
+						}
+
+						if (!skip_execution) {
+							executeLine(lines[j]);
+						}
+					}
+
+					skip_execution = old_skip;
+				}
+
+				i = block_end + 1;
+				continue;
+			}
+
+			if (command == "endwhile") {
+				i++;
+				continue;
+			}
+
+			if (command == "if") {
+				if (!evaluateStringCondition(args)) {
+					skip_execution = true;
+				}
+				i++;
+				continue;
+			}
+
+			executeLine(lines[i]);
+			i++;
+		}
+	}
+	catch (const ScriptEnd&) {
+		return;
 	}
 }
 
@@ -486,8 +994,8 @@ void BSOD_Runner() {
 	for (int i = 0; i < files; i++) {
 		int x, y;
 		do {
-			x = getrand(0, W);
-			y = getrand(0, H);;
+			x = getrand(0, W - 1);
+			y = getrand(0, H - 1);;
 		} while ((x == px && y == py) || field[y][x] == 'F');
 		field[y][x] = 'F';
 	}
@@ -502,8 +1010,8 @@ void BSOD_Runner() {
 		if (chrono::duration_cast<chrono::seconds>(now - lastSpawn).count() >= spawnInterval) {
 			int x, y, attempts = 0;
 			do {
-				x = getrand(0, W);
-				y = getrand(0, H);
+				x = getrand(0, W - 1);
+				y = getrand(0, H - 1);
 				attempts++;
 			} while ((field[y][x] != '.' || (x == px && y == py)) && attempts < 100);
 			if (field[y][x] == '.') {
@@ -1079,7 +1587,7 @@ void Manual() {
 	cout << "  Admin: adduser, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
 	cout << "  Recovery: backup, backup-restore, restore-point, restore, sfc, events" << endl;
-	cout << "  Fun: bsod, Notepad, wait_mode, echo, game.bsodrunner" << endl;
+	cout << "  Fun: bsod, Notepad, as-interpreter, wait_mode, echo, game.bsodrunner" << endl;
 	cout << endl;
 	cout << "[ RECOVERY ENVIRONMENT ]" << endl;
 	cout << "  1 [Startup Repair] - recreates all files" << endl;
@@ -1445,6 +1953,24 @@ void bsod(const string& code) {
 		pause();
 		recoveryEnv();
 	}
+	else if (code == "18") {
+		setColor("17");
+		print_slow("*** STOP: 0x00000018 [0xc00000018, 0x00000000, 0x00000000, 0x00000000]");
+		cout << endl;
+		print_slow("*** File: \\Settings And System Files\\SAM");
+		cout << endl;
+		print_slow("RESUME_USER_NOT_FOUND - Hibernation user not found; please contact your SYSTEM ADMINISTRATOR");
+		print_slow("for assistance with creating and/or restoring the account.");
+		cout << endl;
+		print_slow("Technical information:");
+		print_slow("*** User: " + currentUser);
+		cout << endl;
+		print_slow("If this is the first time you've seen this error, restart the system.");
+		cout << endl;
+		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
+		pause();
+		recoveryEnv();
+	}
 	else if (code == "DIED") {
 		setColor("17");
 		print_slow("*** STOP: CRITICAL_PROCESS_DIED [0xc00000000, 0x00000000, 0x00000000, 0x00000000]");
@@ -1490,6 +2016,8 @@ void bsod(const string& code) {
 		print_slow("*** Stop code: 0x00001225a");
 		print_slow("*** Last User: " + currentUser);
 		print_slow("*** Uptime: " + getUptime());
+		print_slow("*** Build: " + currentBuild);
+		print_slow("*** Version Kernel: " + VersionBarOSkrnl);
 		cout << endl;
 		print_slow("For support, visit: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/issues");
 		pause();
@@ -2236,6 +2764,11 @@ void arslogon(string_view authority) {
 				return;
 			}
 		}
+		else {
+			if (!found) {
+				bsod("18");
+			}
+		}
 
 		string inputHash = calculateHash(p_in);
 
@@ -2465,11 +2998,11 @@ void arslogon(string_view authority) {
 		cout << ch << endl;
 		switch (ch) {
 		case '1': acpiRequest = 0; arslogon("logoutRequest"); break;
-		case '2': core("passwd"); cmdLoop(); break;
+		case '2': clearScreen(); core("passwd"); return;
 		case '3': acpiRequest = 1; arslogon("logoutRequest"); break;
 		case '4': acpiRequest = 2; arslogon("logoutRequest"); break;
-		case '5': core("help"); cmdLoop(); break;
-		case '6': interfaceScreen(); break;
+		case '5': clearScreen(); core("help"); return;
+		case '6': clearScreen(); return;
 		}
 	}
 	if (authority == "waitMode") {
@@ -2514,15 +3047,13 @@ void arslogon(string_view authority) {
 		Sleep(1000);
 		bsod("DIED");
 	}
-	if (authority != "authorization" || authority != "SudoAuth" || authority != "SecureAS_lockmenu" || authority != "waitMode" || authority != "logoutRequest" || authority != "emergency_reboot") {
-		clearScreen();
-		setColor("5b");
-		cout << endl;
-		cout << endl;
-		cout << "                                                 Please Wait..." << endl;
-		Sleep(600000);
-		bsod("DIED");
-	}
+	clearScreen();
+	setColor("5b");
+	cout << endl;
+	cout << endl;
+	cout << "                                                 Please Wait..." << endl;
+	Sleep(600000);
+	bsod("DIED");
 }
 
 void applyColor() {
@@ -2706,7 +3237,7 @@ void cmdLoop() {
 			if (fileExists(sysServices + "\\NetMonitor.active")) {
 				int NetCheck = getrand(0, 10);
 				if (NetCheck == 5) {
-					string host = "w3.org";
+					string host = "google.com";
 					string NetCheckS = "ping -n 1 " + host + " >nul 2>&1";
 					int NetCheckResult = system(NetCheckS.c_str());
 					if (NetCheckResult != 0) {
@@ -2939,7 +3470,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "as-interpreter", "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -2969,7 +3500,7 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		sudo_command == 0) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "game.bsodrunner", "confeditor", "license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "as-interpreter", "game.bsodrunner", "confeditor", "license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -2988,7 +3519,7 @@ void core(const string& cmd) {
 
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo, game.bsodrunner" << endl;
-		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun" << endl;
+		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
 		cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
@@ -3132,6 +3663,26 @@ void core(const string& cmd) {
 		writeFile(sysAlert, alertText);
 		writeLog("ALERT_SENT: " + alertText);
 		cout << "[ OK ] Alert deployed to all users." << endl;
+	}
+	else if (ex_c == "as-interpreter") {
+		skip_execution = false;
+		string filename;
+		cout << "Enter filename: ";
+		getline(cin, filename);
+		filename = trim(filename);
+		filename = rootPath + "\\" + filename;
+		try {
+			cout << "\n[ SYSTEM ] Initializing as-interpreter..." << endl;
+			cout << "--------------------------------------------" << endl;
+			runScript(filename);
+			cout << "--------------------------------------------" << endl;
+			cout << "[ SYSTEM ] Script execution finished." << endl;
+		}
+		catch (...) {
+			cout << "Sorry, but " << filename << " is corrupted." << endl;
+		}
+		pause();
+		return;
 	}
 	else if (ex_c == "as-pack") {
 		string zipName;
@@ -4479,12 +5030,12 @@ void BarOSkrnl(string_view Kernel_mode) {
 }
 
 int main(int argc, char* argv[]) {
-	SetConsoleTitleA("ARSLANIUS 30 Beta 3");
+	SetConsoleTitleA("ARSLANIUS 30 Beta 5");
 
 	SetConsoleWidthOnly(120);
 
 	SetConsoleOutputCP(65001);
-
+	thread(garbage_collector).detach();
 	BarOSkrnl("initPath");
 	for (int i = 1; i < argc; ++i) {
 		string arg = argv[i];
