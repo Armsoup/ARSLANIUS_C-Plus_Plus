@@ -474,13 +474,16 @@ inspired by the original 19th version of the batch project.
 
 ### Example
 ```text
-  var wh = 1
-  while wh = 1
-      print "Hello! "
-      input name
-      print_f "Hi, " + name
-      end
-  endwhile
+var wh = 1
+while wh = 1
+    print "Hello! "
+    input name
+    print "Hi, "
+    print_f name
+    if name = "q"
+    end
+    #endif
+endwhile
 ```
 
 ### Features
