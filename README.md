@@ -501,12 +501,13 @@ endwhile
 
 ### Drivers vs Scripts
 
-	  Feature                       Drivers (.asd)	                     Scripts (.as)
-      Access	           Full (WinAPI, files, registry)	      Sandboxed (fake_ram only)
-      On crash	                     BSoD 0x15	                     try/catch, ОS alive
-      Autoload	                         Yes	                             No
-      Can register commands              Yes	                             No
-      Entry level               	C++, x64 compiler	                10 commands
+| Feature | Drivers (.asd) | Scripts (.as)|
+|--------|---------------|----------------|
+| Access | Full (WinAPI, files, registry) | Sandboxed (fake_ram only) |
+| On crash | BSoD 0x15 | try/catch, OS alive |
+| Autoload | Yes | No |
+| Can register commands | Yes | No |
+| Entry level | C++, x64 compiler | 10 commands |
 
 * * *
 # General Features
@@ -522,9 +523,9 @@ ARSLANIUS supports full session hibernation:
 
 ## Hotkeys
 
-|        Key         |                                       Action                                       |
-|--------------------|------------------------------------------------------------------------------------|
-|   **Ctrl+Alt+K**   |      Kernel hot-reload. Re-reads BCD/REG, reloads all drivers, keeps session.      |
+|  Key | Action |
+|---|---|
+| **Ctrl+Alt+K** | Kernel hot-reload. Re-reads BCD/REG, reloads all drivers, keeps session. |
 | **Ctrl+Alt+Shift** | Secure Attention Sequence (like Ctrl+Alt+Del in Windows). Opens SecureAS lockmenu. |
 
 ## BSoD Reference
