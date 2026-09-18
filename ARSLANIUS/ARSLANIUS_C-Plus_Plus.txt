@@ -779,8 +779,8 @@ void executeLine(const string& line) {
 	else if (command == "readfile") {
 		size_t eq_pos = args.find('=');
 		if (eq_pos != string::npos) {
-			string file_name = trim(args.substr(0, eq_pos));
-			string var_name = trim(args.substr(eq_pos + 1));
+			string var_name = trim(args.substr(0, eq_pos));
+			string file_name = trim(args.substr(eq_pos + 1));
 			string filecontent;
 			if (file_name.empty() || file_name.find("Users") != string::npos) {
 				cout << "ERROR: The file/path name cannot be empty or contain \"Users\"" << endl;
