@@ -38,32 +38,32 @@ Features
 
 • Memory Diagnostic tool
 
-• ARS Store (application installer — Scanner, NotePad Lite, Calc)
+• ARS Store (application installer - Scanner, NotePad Lite, Calc)
 
-• OOBE (Out-Of-Box Experience) — first-time setup with Windows XP setup music
+• OOBE (Out-Of-Box Experience) - first-time setup with Windows XP setup music
 
 • Full event logging (system.log)
 
 • 20 BSOD (Blue Screen of Death) types with stop codes
 
-• Integrity protection — SHA-256, Antihack, file size limits, config structure validation on every boot
+• Integrity protection - SHA-256, Antihack, file size limits, config structure validation on every boot
 
-• Lockdown mode — blocks all logins until OOBE is completed
+• Lockdown mode - blocks all logins until OOBE is completed
 
 • Portable architecture using executable path detection
 
-• x64 native — no 32-bit limitations
+• x64 native - no 32-bit limitations
 
 * * *
 Build numbering logic
 
-Build 59.1.0
+Build 60.2.0
 
-59 - VERSION (For example, ARSLANIUS 28 - 58.x.x)
+60 - VERSION (For example, ARSLANIUS 28 - 58.x.x, ARSLANIUS 29 - 59.x.x)
 
-1 - STAGE (0 -  alpha, 1 - beta, 2 - RC/Release, 3 - SP)
+2 - STAGE (0 - alpha, 1 - beta, 2 - RC/Release, 3 - SP)
 
-0 - PATCH OR VERSION BETA/ALPHA/RC
+0 - PATCH
       
 * * *
 
@@ -82,9 +82,9 @@ The ARSLANIUS Driver SDK allows anyone to extend the ARSLANIUS operating system 
 
 Copy these files to your project folder:
 
-- `arslanius.h` — The SDK header
+- `arslanius.h` - The SDK header
 
-- `template.cpp` — Sample driver to use as a starting point
+- `template.cpp` - Sample driver to use as a starting point
 
 ### 3. Build Your Driver
 
@@ -94,7 +94,7 @@ Open **x64 Native Tools Command Prompt for VS 2022** and run:
 cl /LD your_driver.cpp /Fe:your_driver.asd /EHsc /MT
 ```
 
-This creates your_driver.asd — a 64-bit DLL with all dependencies statically linked.
+This creates your_driver.asd - a 64-bit DLL with all dependencies statically linked.
 
 1. Copy your_driver.asd to the Drivers folder inside Settings And System Files
 2. Restart ARSLANIUS
@@ -488,13 +488,14 @@ endwhile
 
 ### Features
 
-  - print / print_f — output
-  - input / getch — input
-  - var / calc — variables and math
-  - if / #endif — conditionals
-  - while / endwhile — loops
-  - end — exit script
-  - wakeupvar — keep variable in RAM longer
+  - print / print_f - output
+  - input / getch - input
+  - var / calc - variables and math
+  - if / #endif - conditionals
+  - while / endwhile - loops
+  - end - exit script
+  - wakeupvar - keep variable in RAM longer
+  - writefile/appendfile/readfile - filesystem
   - RAM with TTL (30 min) and garbage collector
 
 ---
@@ -515,8 +516,8 @@ endwhile
 
 ARSLANIUS supports full session hibernation:
 
-- **hibernate** — saves current session to `hibernate.sys` and exits
-- On next boot — prompts to resume
+- **hibernate** - saves current session to `hibernate.sys` and exits
+- On next boot - prompts to resume
 - Password is required to resume
 - If user was deleted from SAM during hibernation → BSoD 0x18
 ### If "FAST_BOOT=1", the system automatically enters hibernation upon shutdown.
