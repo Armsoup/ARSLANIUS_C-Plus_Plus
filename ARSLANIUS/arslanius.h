@@ -15,7 +15,7 @@ using CommandHandler = std::function<void(const std::string& args)>;
 struct ARSLANIUS_API {
     void (*register_command)(const char* name, CommandHandler handler);
     void (*print)(const char* text);
-    void (*print_slow)(const char* text);
+    void (*print_slow)(const char* text, int delay);
     const char* (*read_registry)(const char* key);
     void (*write_registry)(const char* key, const char* value);
     void (*write_log)(const char* message);
