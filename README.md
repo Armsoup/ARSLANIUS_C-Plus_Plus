@@ -205,7 +205,7 @@ void cmd_sdk_demo(const string& args) {
     // === OUTPUT ===
     api->print("[ OUTPUT ]\n");
     api->print("  print() - normal output\n");
-    api->print_slow("  print_slow() - typewriter effect\n");
+    api->print_slow("  print_slow() - typewriter effect\n", 50);
     api->print("\n");
     
     api->print("[ DONE ] SDK Demo complete!\n");
@@ -345,7 +345,7 @@ void execute_command(const char* cmd);
 
 ```cpp
 void print(const char* text);
-void print_slow(const char* text);     // Typewriter effect
+void print_slow(const char* text, int delay);     // Typewriter effect
 void clear_screen();
 void set_color(const char* color);     // VGA hex: "0e", "1f", "4f", etc.
 void pause();
