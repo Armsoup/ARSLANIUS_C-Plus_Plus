@@ -125,7 +125,7 @@ MemoryGuard __memory_guard;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "60.2.1";
+const string CURRENT_BUILD = "60.3.0";
 const string REG_VERSION = "30";
 const string OS_NAME_DEFAULT = "ARSLANIUS 30";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
@@ -162,6 +162,7 @@ string currentBuild = CURRENT_BUILD;
 DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
 DWORD64 logoutTimeout = 60;
 DWORD64 kernelStartTime = 0;
+DWORD64 savedUptime = 0;
 int defaultMode = DEFAULT_MODE_DEFAULT;
 int bootChoice = 0;
 bool requestFromResume = 0;
@@ -275,16 +276,26 @@ int getrand(int min, int max) {
 string getUptime() {
 	if (kernelStartTime == 0) return "[ ERROR ] For some unknown reason, the kernel was not initialized.";
 	DWORD64 now = GetTickCount64();
-	DWORD64 elapsed = now - kernelStartTime;
+	DWORD64 elapsed = savedUptime + (now - kernelStartTime);
 	DWORD64 seconds = elapsed / 1000;
 	DWORD64 minutes = seconds / 60;
 	DWORD64 hours = minutes / 60;
 	DWORD64 days = hours / 24;
+	DWORD64 years = days / 365;
+	days %= 365;
+	DWORD64 months = days / 30;
+	days %= 30;
 	seconds %= 60;
 	minutes %= 60;
 	hours %= 24;
 	char buf[128];
-	if (days > 0) {
+	if (years > 0) {
+		sprintf_s(buf, "%lluy %llum %llud %lluh %llum %llus", years, months, days, hours, minutes, seconds);
+	}
+	else if (months > 0) {
+		sprintf_s(buf, "%llum %llud %lluh %llum %llus", months, days, hours, minutes, seconds);
+	}
+	else if (days > 0) {
 		sprintf_s(buf, "%llud %lluh %llum %llus", days, hours, minutes, seconds);
 	}
 	else if (hours > 0) {
@@ -829,7 +840,7 @@ void runScript(const string& path) {
 	bool has_end = false;
 	for (const auto& l : lines) {
 		string trimmed = trim(l);
-		if (trimmed == "end" || (trimmed.rfind("end", 0) == 0 && std::isspace(static_cast<unsigned char>(trimmed[3])))) { has_end = true; break; }
+		if (trimmed == "end" || (trimmed.rfind("end", 0) == 0 && isspace(static_cast<unsigned char>(trimmed[3])))) { has_end = true; break; }
 	}
 	if (!has_end) {
 		cout << "CRITICAL ERROR: end not found!" << endl;
@@ -2720,7 +2731,7 @@ void memoryDiag() {
 // =====================================================================
 
 void logonScreen() {
-	currentUser = "SYSTEM";
+	currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
 	userHome = sysProf;
 	acpiRequest = 0;
 	vector<string> users;
@@ -2833,7 +2844,6 @@ void logonScreen() {
 			if (u_in == "Shutdown") {
 				writeLog("SHUTDOWN_FROM_LOGON");
 				acpiRequest = 1;
-				fastBoot = 0;
 				shutdownScreen();
 				return;
 			}
@@ -2889,7 +2899,6 @@ void logonScreen() {
 		else if (key == 27) {
 			writeLog("SHUTDOWN_FROM_LOGON");
 			acpiRequest = 1;
-			fastBoot = 0;
 			shutdownScreen();
 			return;
 		}
@@ -3257,6 +3266,11 @@ void applyColor() {
 void interfaceScreen() {
 	clearScreen();
 	if (currentUser != "KERNEL") saveBCD();
+	if (currentUser.find("LogonAuthorityUser") != string::npos) {
+		cout << "CRITICAL ERROR: Access for restricted service accounts is prohibited." << endl;
+		pause();
+		logonScreen();
+	}
 
 	// Start services
 	if (!safeMode && !rec && diagnostic == 0 && currentUser != "KERNEL") {
@@ -4104,10 +4118,16 @@ void core(const string& cmd) {
 		cout << "Destination file: ";
 		getline(cin, dst);
 		dst = trim(dst);
-		if (fs::copy_file(src, dst)) {
-			cout << "[ OK ] Copied." << endl;
+		try {
+			if (fs::copy_file(src, dst)) {
+				cout << "[ OK ] Copied." << endl;
+			}
+			else {
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] Copy failed." << endl;
+			}
 		}
-		else {
+		catch (...) {
 			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 			cout << "[ ERROR ] Copy failed." << endl;
 		}
@@ -4266,7 +4286,7 @@ void core(const string& cmd) {
 		cout << "Username: ";
 		getline(cin, nu);
 		nu = trim(nu);
-		if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR") {
+		if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR" || nu.find("LogonAuthorityUser") != string::npos) {
 			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 			cout << "[ ERROR ] Reserved username." << endl;
 			return;
@@ -4814,7 +4834,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 					if (osvi.dwMajorVersion < 10) {
 						cout << "Sorry, but ARSLANIUS requires Windows 10 or later to work :(" << endl;
 						cout << endl;
-						cout << "Do you want to download Windows 10?" << endl;
+						cout << "Do you want to download Windows 10? (If you select 'n', ARSLANIUS will offer VxKex NEXT)" << endl;
 						cout << "Y/N: ";
 						char choice = _getch();
 						choice = tolower(choice);
@@ -4825,7 +4845,20 @@ void BarOSkrnl(string_view Kernel_mode) {
 							system("start \"\" https://www.microsoft.com/en-us/software-download/windows10"); break;
 						}
 						case 'n': {
-							exit(0);
+							clearScreen();
+							cout << "Maybe you want to download VxKex NEXT? (only for Windows 7)" << endl;
+							cout << "Y/N: ";
+							choice = _getch();
+							choice = tolower(choice);
+							cout << choice << endl;
+							switch (choice) {
+							case 'y': {
+								system("start \"\" https://github.com/YuZhouRen86/VxKex-NEXT"); break;
+							}
+							case 'n': {
+								exit(0);
+							}
+							}
 						}
 						}
 						exit(0);
@@ -4860,6 +4893,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 		userHome = sysProf;
 		currentUser = "KERNEL";
 		kernelStartTime = GetTickCount64();
+		savedUptime = 0;
 		AntiHack_Init();
 
 		if (!dirExists(configRoot)) {
@@ -5121,11 +5155,14 @@ void BarOSkrnl(string_view Kernel_mode) {
 		string hiberPath = configRoot + "\\hibernate.sys";
 		if (fileExists(hiberPath)) fs::remove(hiberPath);
 		stringstream ss;
+		DWORD64 now = GetTickCount64();
+		DWORD64 elapsed = savedUptime + (now - kernelStartTime);
 		ss << "USER=" << currentUser << endl;
 		ss << "USER_HOME=" << userHome << endl;
 		ss << "SAFE_MODE=" << safeMode << endl;
 		ss << "REC=" << rec << endl;
 		ss << "DIAG=" << diagnostic << endl;
+		ss << "UPTIME=" << elapsed << endl;
 		ss << "DATE=" << getCurrentDateTime() << endl;
 		writeFile(hiberPath, ss.str());
 		exit(0);
@@ -5170,12 +5207,14 @@ void BarOSkrnl(string_view Kernel_mode) {
 						}
 					}
 					else if (key == "DIAG") diagnostic = stoi(value);
+					else if (key == "UPTIME") savedUptime = _strtoui64(value.c_str(), nullptr, 10);
 				}
 				catch (...) {
 					continue;
 				}
 			}
 		}
+		if (currentUser == "BarOS AUTHORITY\\LogonAuthorityUser") { requestFromResume = 0; logonScreen(); }
 		if (!resumeScreenShown) {
 			for (int i = 1; i <= 12; i++) {
 				clearScreen();
@@ -5262,11 +5301,12 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	SetConsoleTitleA("ARSLANIUS 30");
+	SetConsoleTitleA("ARSLANIUS 30 Service Pack: 1");
 
 	SetConsoleWidthOnly(120);
 
-	SetConsoleOutputCP(65001);
+	SetConsoleCP(1251);
+	SetConsoleOutputCP(1251);
 	thread(garbage_collector).detach();
 	BarOSkrnl("initPath");
 	for (int i = 1; i < argc; ++i) {
