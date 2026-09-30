@@ -1,0 +1,87 @@
+name: Bug/Crash report
+description: Report an issue with authorization, loading, or the shell
+labels: ["bug"]
+assignees:
+  - Armsoup
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### ARSLANIUS bug report
+        Fill this out properly. Vague reports will be closed.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: |
+        I launched the file and it loaded, but there were no users on the login screen...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Press 1 in the boot menu.
+        2. Enter password for the user.
+        3. Wait 5 seconds.
+        4. Error "..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+      placeholder: I had to log in as the user.
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Attach a screenshot of the BSOD / error / login screen if possible. You can drag and drop images here.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: windows-version
+    attributes:
+      label: Windows Version
+      options:
+        - Windows 11
+        - Windows 10
+        - Windows 7 / 8
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: ARSLANIUS Specs
+      description: |
+        Please complete the version information. 
+        Tip: If you cannot enter these commands due to login or loading issues, launch ARSLANIUS with `-earlyconsole` flag: `ARSLANIUS.exe -earlyconsole`
+      placeholder: |
+        - ARSLANIUS version: [e.g. 30 SP: 1]
+        - Build: [e.g. 60.3.0, see `ver` command]
+        - Kernel: [e.g. BarOS 24.2, see `taskmgr` or `sysinfo`]
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add any other context about the problem here.
+      placeholder: |
+        I checked SAM manually — the user is there. So the login screen doesn't see them, even though they exist.
+    validations:
+      required: false
