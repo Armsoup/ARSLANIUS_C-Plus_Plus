@@ -167,8 +167,10 @@ void cmd_sdk_demo(const string& args) {
     // === FILES ===
     api->print("[ FILES ]\n");
     
-    if (api->file_exists("kernel.dll")) {
-        api->print("  kernel.dll: EXISTS\n");
+	string TEMP;
+	string path = (TEMP = string(api->get_config_path())) + "\\SAM";
+    if (api->file_exists(path.c_str())) {
+        api->print("  SAM: EXISTS\n");
     }
     
     if (api->create_directory("SDK_Test")) {
@@ -281,7 +283,7 @@ void cmd_sdk_time(const string& args) {
 // =====================================================================
 void cmd_sdk_info(const string& args) {
     api->print("=== SDK Sample Driver ===\n");
-    api->print("Version: 1.0.0\n");
+    api->print("Version: 1.0.1\n");
     api->print("Author: ARSLANIUS Community\n");
     api->print("\nCommands provided:\n");
     api->print("  sdk.demo  - Full API demonstration\n");
