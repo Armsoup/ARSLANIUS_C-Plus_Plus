@@ -57,13 +57,10 @@ Features
 * * *
 Build numbering logic
 
-Build 60.2.0
+Build 257
 
-60 - VERSION (For example, ARSLANIUS 28 - 58.x.x, ARSLANIUS 29 - 59.x.x)
-
-2 - STAGE (0 - alpha, 1 - beta, 2 - RC/Release, 3 - SP)
-
-0 - PATCH
+Initially, the number 243 was taken as the approximate total count of compilations, 
+but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
       
 * * *
 
