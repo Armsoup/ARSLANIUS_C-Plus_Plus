@@ -23,7 +23,7 @@ PRs are accepted. But read this first - otherwise your PR will be closed without
 - Braces on the same line
 - `std::` or `using namespace std;` - either, but be consistent within a file
 - No commented-out code. If you don't need it, delete it
-- Don't touch `clearScreen()` unless you know why `dwSize.Y == windowHeight` is there
+- Do not touch `clearScreen()` unless necessary
 
 ## Before you open a PR
 
