@@ -53,8 +53,10 @@ void cmd_sdk_demo(const string& args) {
     // === FILES ===
     api->print("[ FILES ]\n");
     
-    if (api->file_exists("kernel.dll")) {
-        api->print("  kernel.dll: EXISTS\n");
+	string TEMP;
+	string path = (TEMP = string(api->get_config_path())) + "\\SAM";
+    if (api->file_exists(path.c_str())) {
+        api->print("  SAM: EXISTS\n");
     }
     
     if (api->create_directory("SDK_Test")) {

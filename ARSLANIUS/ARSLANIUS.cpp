@@ -27,6 +27,7 @@
 #include "resource.h"
 #include "miniz.h"
 #include "arslanius.h"
+#include "BuildVersion.h"
 
 std::map<std::string, CommandHandler> driverCommands;
 ARSLANIUS_API g_api;
@@ -125,7 +126,6 @@ MemoryGuard __memory_guard;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string CURRENT_BUILD = "61.1.0";
 const string REG_VERSION = "31";
 const string OS_NAME_DEFAULT = "ARSLANIUS 31";
 const string CODENAME_DEFAULT = "Emerald";
@@ -184,6 +184,8 @@ bool DriverloadOFF = 0;
 bool autorun = 1;
 bool resumeScreenShown = 0;
 DWORD64 fileSize = 0;
+int bootcount = 0;
+int successfulboot = 0;
 string systemColor = "0e";
 string adminColor = "4f";
 string userColor = "1f";
@@ -211,6 +213,7 @@ void saveBCD();
 void bootMenu();
 void normalBoot();
 void safeModeBoot();
+void AutoRepair();
 void recoveryEnv();
 void diagnosticMode(int mode);
 void startupRepair();
@@ -1086,9 +1089,10 @@ void clearScreen() {
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
 	if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
+	size_t bufferSize = 0;
+	getenv_s(&bufferSize, nullptr, 0, "WT_SESSION");
 
-	int windowHeight = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-	if (csbi.dwSize.Y == windowHeight) {
+	if (bufferSize > 0) {
 		printf("\x1b[H\x1b[2J\x1b[3J");
 	}
 	else {
@@ -1160,6 +1164,8 @@ void loadBCD() {
 				}
 				else DriverloadOFF = DriverloadOFF;
 			}
+			else if (key == "BOOT_COUNT") bootcount = stoi(value);
+			else if (key == "BOOT_COUNT_SUC") successfulboot = stoi(value);
 		}
 		catch (...) {
 			continue;
@@ -1691,7 +1697,9 @@ void check_BCD() {
 		"BOOT_TIMEOUT=",
 		"DEFAULT_MODE=",
 		"FAST_BOOT=",
-		"DRIVER_LOAD_OFF="
+		"DRIVER_LOAD_OFF=",
+		"BOOT_COUNT=",
+		"BOOT_COUNT_SUC="
 	};
 	string content = readFile(configRoot + "\\BCD");
 	string lowerContent = content;
@@ -1791,7 +1799,8 @@ void saveBCD() {
 	ss << "FAST_BOOT=" << fastBoot << endl;
 	ss << "LAST_SUCCESSFUL_MODE=" << lastSuccessfulMode << endl;
 	ss << "DRIVER_LOAD_OFF=" << DriverloadOFF << endl;
-	ss << "BOOT_COUNT=0" << endl;
+	ss << "BOOT_COUNT=" << bootcount << endl;
+	ss << "BOOT_COUNT_SUC=" << successfulboot << endl;
 	ss << "LAST_BOOT_SUCCESS=" << getCurrentDateTime() << endl;
 	writeFile(bcdPath, ss.str());
 }
@@ -1826,6 +1835,7 @@ void Manual() {
 	cout << "  2 or 3 - restore from restore points or backup" << endl;
 	cout << "======================================================================================================================" << endl;
 	pause();
+	bootcount--;
 	bootMenu();
 }
 
@@ -1855,8 +1865,8 @@ void Update() {
 		reg_update << "SETUP=0" << endl;
 		reg_update << "REG_VERSION=" << REG_VERSION << endl;
 		writeFile(regPath, reg_update.str());
-		bootMenu();
 	}
+	bootcount--;
 	bootMenu();
 }
 
@@ -2257,8 +2267,26 @@ void bsod(string_view code) {
 // BOOT MENU
 // =====================================================================
 
+void check_all() {
+	if (!fileExists(kernelPath)) {
+		loader_errors("1");
+	};
+	if (!fileExists(regPath)) {
+		loader_errors("4");
+	};
+	check_registry();
+	if (REG_VERSION_FOUND != REG_VERSION) {
+		loader_errors("3");
+	}
+	check_AUTHORITY();
+	check_kernel();
+	string kernel_hash_check = readFile(kernelPath);
+	if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) loader_errors("2");
+}
+
 void bootMenu() {
 	BarOSkrnl("loading");
+	bootcount++;
 	if (setup) {
 		setColor("1f");
 		cout << "======================================================================================================================" << endl;
@@ -2443,25 +2471,13 @@ void bootMenu() {
 		else if (choice == '7') Update();
 		else bootChoice = defaultMode;
 
-		if (!fileExists(kernelPath)) {
-			loader_errors("1");
-		};
-		if (!fileExists(regPath)) {
-			loader_errors("4");
-		};
-		check_registry();
-		if (REG_VERSION_FOUND != REG_VERSION) {
-			loader_errors("3");
-		}
-		check_AUTHORITY();
-		check_kernel();
-		string kernel_hash_check = readFile(kernelPath);
-		if (kernel_hash_check.find("SYSTEM = " + EXPECTED_SYSTEM_HASH) == string::npos) loader_errors("2");
 		if (!fileExists(configRoot + "\\BCD")) {
 			loader_errors("14");
 		};
 		check_BCD();
 	}
+	saveBCD();
+	loadBCD();
 
 	if (bootChoice == 3) {
 		recoveryRequest = 1;
@@ -2477,6 +2493,43 @@ void bootMenu() {
 void normalBoot() {
 	// Check config
 	if (!recoveryRequest) {
+		int difference = bootcount - successfulboot;
+		if (difference > 3) {
+			clearScreen();
+			cout << "                                                  Please Wait..." << endl;
+			Sleep(2500);
+			cout << endl;
+			cout << "                                         Initiating automatic recovery..." << endl;
+			for (int i = 1; i <= 20; i++) {
+				clearScreen();
+				cout << "                                                  Please Wait..." << endl;
+				cout << endl;
+				switch (i) {
+				case 1: cout << "                                         Initiating automatic recovery" << endl; break;
+				case 2: cout << "                                         Initiating automatic recovery." << endl; break;
+				case 3: cout << "                                         Initiating automatic recovery.." << endl; break;
+				case 4: cout << "                                         Initiating automatic recovery..." << endl; break;
+				case 5: cout << "                                         Initiating automatic recovery" << endl; break;
+				case 6: cout << "                                         Initiating automatic recovery." << endl; break;
+				case 7: cout << "                                         Initiating automatic recovery.." << endl; break;
+				case 8: cout << "                                         Initiating automatic recovery..." << endl; break;
+				case 9: cout << "                                         Initiating automatic recovery" << endl; break;
+				case 10: cout << "                                         Initiating automatic recovery." << endl; break;
+				case 11: cout << "                                         Initiating automatic recovery.." << endl; break;
+				case 12: cout << "                                         Initiating automatic recovery..." << endl; break;
+				case 13: cout << "                                         Initiating automatic recovery" << endl; break;
+				case 14: cout << "                                         Initiating automatic recovery." << endl; break;
+				case 15: cout << "                                         Initiating automatic recovery.." << endl; break;
+				case 16: cout << "                                         Initiating automatic recovery..." << endl; break;
+				case 17: cout << "                                         Initiating automatic recovery" << endl; break;
+				case 18: cout << "                                         Initiating automatic recovery." << endl; break;
+				case 19: cout << "                                         Initiating automatic recovery.." << endl; break;
+				case 20: cout << "                                         Initiating automatic recovery..." << endl; break;
+				}
+				Sleep(400);
+			}
+			AutoRepair();
+		}
 		if (!dirExists(configRoot)) {
 			loader_errors("1a");
 			return;
@@ -2485,8 +2538,8 @@ void normalBoot() {
 			loader_errors("14");  // BCD not found
 			return;
 		}
+		check_all();
 	}
-
 	// Boot animation
 	for (int i = 1; i <= 20; i++) {
 		clearScreen();
@@ -2531,6 +2584,7 @@ void normalBoot() {
 		recoveryRequest = 0;
 		recoveryEnv();
 	}
+	successfulboot++;
 	logonScreen();
 }
 
@@ -2555,6 +2609,7 @@ void safeModeBoot() {
 		return;
 	}
 
+	check_all();
 	cout << "Loaded: \\Settings And System Files\\BCD" << endl;
 	if (fileExists(kernelPath)) cout << "Loaded: \\Settings And System Files\\SAM" << endl;
 	Sleep(1000);
@@ -2570,10 +2625,12 @@ void safeModeBoot() {
 	fs::remove(sysServices + "\\TrustedInstaller.active");
 	fs::remove(sysServices + "\\NetMonitor.active");
 
+	successfulboot++;
 	logonScreen();
 }
 
 void diagnosticMode(int mode) {
+	check_all();
 	diagnostic = mode;
 	safeMode = 0;
 	rec = 0;
@@ -2590,16 +2647,63 @@ void diagnosticMode(int mode) {
 		currentUser = "BarOS SERVICE\\NetMonitor";
 	}
 
+	successfulboot++;
 	interfaceScreen();
 }
 
 // =====================================================================
-// RECOVERY ENVIRONMENT
+// RECOVERY ENVIRONMENT & AUTO-REPAIR
 // =====================================================================
+void AutoRepair() {
+	rec = 1;
+	diagnostic = 0;
+	safeMode = 0;
+	bootcount = 0;
+	successfulboot = 0;
+	bool hasError = 0;
+
+	clearScreen();
+	setColor("3f");
+	if (!fileExists(kernelPath) || !fileExists(regPath) || !fileExists(bcdPath)) hasError = 1;
+	if (hasError) {
+		cout << "A potential problem has been found." << endl;
+		cout << "Your data will be erased after the restore." << endl;
+		cout << "Select an option:" << endl;
+		cout << " [1] Repair and erase data." << endl;
+		cout << " [2] Additional options" << endl;
+		cout << "Select option (1/2): ";
+		char choice = _getch();
+		cout << choice << endl;
+
+		switch (choice) {
+		case '1': startupRepair(); break;
+		case '2': recoveryEnv(); break;
+		default: AutoRepair(); return;
+		}
+	}
+	else {
+		cout << "Automatic repair could not determine the cause of the error; the computer may have been started incorrectly." << endl;
+		cout << "Try restarting it." << endl;
+		cout << " [1] Restart the computer" << endl;
+		cout << " [2] Additional options" << endl;
+		cout << "Select option (1/2): ";
+		char choice = _getch();
+		cout << choice << endl;
+
+		switch (choice) {
+		case '1': saveBCD(); acpiRequest = 2; BarOSkrnl("ACPI"); break;
+		case '2': recoveryEnv(); break;
+		default: AutoRepair(); return;
+		}
+	}
+}
+
 void recoveryEnv() {
 	rec = 1;
 	diagnostic = 0;
 	safeMode = 0;
+	bootcount = 0;
+	successfulboot = 0;
 
 	clearScreen();
 	setColor("1f");
@@ -5437,7 +5541,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 1";
+	string Title = getOSName() + " Beta 2";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);

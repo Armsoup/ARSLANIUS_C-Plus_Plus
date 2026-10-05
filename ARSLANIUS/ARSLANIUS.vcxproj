@@ -134,6 +134,10 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PreBuildEvent>
+      <Command>powershell -Command "$file='$(ProjectDir)BuildVersion.h'; if (Test-Path $file) { $content = Get-Content $file -Raw; if ($content -match '\"(\d+)\"') { $num = [int]$Matches[1] + 1; $content = $content -replace '\"(\d+)\"', ('\"' + $num + '\"'); Set-Content $file $content -NoNewline } }"
+</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
