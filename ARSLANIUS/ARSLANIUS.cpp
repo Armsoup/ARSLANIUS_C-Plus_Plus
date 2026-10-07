@@ -131,6 +131,7 @@ const string OS_NAME_DEFAULT = "ARSLANIUS 31";
 const string CODENAME_DEFAULT = "Emerald";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
 const string EXPECTED_ADMIN_HASH = "8f84f2200431dc8458256e74fbd76a8030e4ac684855c599ba31714b7a8adc05";
+const string EXPECTED_VERIFY_HASH = "c0e7ff17fdedb150b97f10aaa614fa5cf788b4b9a37152297344d05f676969df";
 const int BOOT_TIMEOUT_DEFAULT = 30;
 const int DEFAULT_MODE_DEFAULT = 1;
 const int MAX_LOGIN_ATTEMPTS = 10;
@@ -170,6 +171,7 @@ int bootChoice = 0;
 bool requestFromResume = 0;
 bool safeMode = 0;
 bool rec = 0;
+bool earlycons = 0;
 int diagnostic = 0;
 int lastSuccessfulMode = 0;
 int acpiRequest = 0;
@@ -182,7 +184,7 @@ bool lockdown = 0;
 int loginAttempts = 0;
 bool DriverloadOFF = 0;
 bool autorun = 1;
-bool resumeScreenShown = 0;
+bool SuccessAuth = 0;
 DWORD64 fileSize = 0;
 int bootcount = 0;
 int successfulboot = 0;
@@ -206,8 +208,10 @@ string regKey = "SYSTEM_COLOR";
 // FORWARD DECLARATIONS
 // =====================================================================
 void BarOSkrnl(string_view Kernel_mode);
+void SMSS();
 void pause();
 string getOSName();
+bool isWindowsTerminal();
 void loadBCD();
 void saveBCD();
 void bootMenu();
@@ -883,6 +887,45 @@ void runScript(const string& path) {
 	while (getline(file, line)) {
 		lines.push_back(line);
 	}
+
+	if (lines.empty()) {
+		cout << "[ ERROR ] Script file is empty!" << endl;
+		return;
+	}
+
+	string first_line = lines.front();
+	string target = "#trust";
+	size_t pos = first_line.find(target);
+
+	bool is_verified = false;
+
+	if (pos != string::npos) {
+		size_t value_start = pos + target.length();
+		string result = first_line.substr(value_start);
+
+		if (!result.empty() && result[0] == ' ') {
+			result = result.substr(1);
+		}
+		result = trim(result);
+
+		string hash = calculateHash(result);
+		if (hash == EXPECTED_VERIFY_HASH) {
+			is_verified = true;
+		}
+	}
+
+	if (!is_verified) {
+		cout << "WARNING: Unsigned script! Do you really want to run it?" << endl;
+		cout << "Y/N: ";
+
+		char ch = _getch();
+		cout << ch << endl;
+
+		if (toupper(ch) != 'Y') {
+			return;
+		}
+	}
+
 	bool has_end = false;
 	for (const auto& l : lines) {
 		string trimmed = trim(l);
@@ -1085,14 +1128,25 @@ void pause() {
 	cout << endl;
 }
 
+bool isWindowsTerminal() {
+	HWND hwnd = GetConsoleWindow();
+	if (!hwnd) return false;
+
+	char className[64];
+	if (GetClassNameA(hwnd, className, sizeof(className))) {
+		if (strcmp(className, "PseudoConsoleWindow") == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void clearScreen() {
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
 	if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) return;
-	size_t bufferSize = 0;
-	getenv_s(&bufferSize, nullptr, 0, "WT_SESSION");
 
-	if (bufferSize > 0) {
+	if (isWindowsTerminal()) {
 		printf("\x1b[H\x1b[2J\x1b[3J");
 	}
 	else {
@@ -1183,6 +1237,53 @@ void print_slow(string_view text, int delay) {
 	timeEndPeriod(1);
 }
 
+struct SessionEnd {
+	int action;   // 0 = logout, 1 = shutdown, 2 = reboot
+};
+
+DWORD WINAPI SessionThread(LPVOID) {
+	try {
+		if (rec || earlycons || diagnostic != 0) {
+			if (acpiRequest != 0) return 0;
+			interfaceScreen();
+		}
+		else if (!requestFromResume && !rec && !earlycons && diagnostic == 0) {
+			logonScreen();
+			if (acpiRequest != 0) return 0;
+
+			interfaceScreen();
+		}
+		else {
+			BarOSkrnl("resume");
+			if (acpiRequest != 0) return 0;
+			interfaceScreen();
+		}
+	}
+	catch (const SessionEnd&) {}
+	return 0;
+}
+
+void SMSS() {
+	setColor("0e");
+	Sleep(200);
+	while (true) {
+		HANDLE h = CreateThread(NULL, 0, SessionThread, NULL, 0, NULL);
+		if (h == NULL) {
+			clearScreen();
+			cout << "Critical error in the Session Manager subsystem! Further startup is impossible." << endl;
+			bsod("");
+			return;
+		}
+		WaitForSingleObject(h, INFINITE);
+		CloseHandle(h);
+
+		if (acpiRequest == 1 || acpiRequest == 2) {
+			shutdownScreen();
+			return;
+		}
+	}
+}
+
 void BSOD_Runner() {
 	const int H = 10, W = 20;
 	char field[H][W];
@@ -1246,7 +1347,7 @@ void BSOD_Runner() {
 		cout << "======================================================================================================================" << endl;
 
 		char key = _getch();
-		if (key == 'q' || key == 27) applyColor();
+		if (key == 'q' || key == 27) { applyColor(); return; }
 
 		int nx = px, ny = py;
 		if (key == 'w') ny--;
@@ -1306,6 +1407,7 @@ void BSOD_Runner() {
 	cout << "\n  Press any key to return to ARSLANIUS...";
 	char TEMP = _getch();
 	applyColor();
+	return;
 }
 
 void installapp(string_view app_id) {
@@ -1824,7 +1926,7 @@ void Manual() {
 	cout << "[ COMMANDS ]" << endl;
 	cout << "  System: help, lock, alias, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
 	cout << "  Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
-	cout << "  Admin: adduser, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
+	cout << "  Admin: adduser, text_to_sha256, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
 	cout << "  Recovery: backup, backup-restore, restore-point, restore, sfc, events" << endl;
 	cout << "  Fun: bsod, Notepad, as-interpreter, wait_mode, echo, game.bsodrunner" << endl;
@@ -2287,6 +2389,10 @@ void check_all() {
 void bootMenu() {
 	BarOSkrnl("loading");
 	bootcount++;
+	acpiRequest = 0;
+	diagnostic = 0;
+	safeMode = 0;
+	earlycons = 0;
 	if (setup) {
 		setColor("1f");
 		cout << "======================================================================================================================" << endl;
@@ -2412,7 +2518,9 @@ void bootMenu() {
 
 		switch (choice) {
 		case 'y': {
-			BarOSkrnl("resume"); break;
+			requestFromResume = 1;
+			SMSS();
+			break;
 		}
 		}
 	}
@@ -2420,8 +2528,6 @@ void bootMenu() {
 	if (!recoveryRequest) {
 		clearScreen();
 		setColor("0f");
-		diagnostic = 0;
-		safeMode = 0;
 		rec = 0;
 		cout << "======================================================================================================================" << endl;
 		cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
@@ -2541,9 +2647,9 @@ void normalBoot() {
 		check_all();
 	}
 	// Boot animation
+	setColor("0f");
 	for (int i = 1; i <= 20; i++) {
 		clearScreen();
-		setColor("0f");
 		cout << "======================================================================================================================" << endl;
 		cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
 		cout << "======================================================================================================================" << endl;
@@ -2585,12 +2691,13 @@ void normalBoot() {
 		recoveryEnv();
 	}
 	successfulboot++;
-	logonScreen();
+	SMSS();
 }
 
 void safeModeBoot() {
 	clearScreen();
 	setColor("0f");
+	acpiRequest = 0;
 	safeMode = 1;
 	cout << "======================================================================================================================" << endl;
 	cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
@@ -2626,14 +2733,16 @@ void safeModeBoot() {
 	fs::remove(sysServices + "\\NetMonitor.active");
 
 	successfulboot++;
-	logonScreen();
+	SMSS();
 }
 
 void diagnosticMode(int mode) {
 	check_all();
+	acpiRequest = 0;
 	diagnostic = mode;
 	safeMode = 0;
 	rec = 0;
+	earlycons = 0;
 
 	// Disable some services
 	if (mode == 1) {
@@ -2648,18 +2757,19 @@ void diagnosticMode(int mode) {
 	}
 
 	successfulboot++;
-	interfaceScreen();
+	SMSS();
 }
 
 // =====================================================================
 // RECOVERY ENVIRONMENT & AUTO-REPAIR
 // =====================================================================
 void AutoRepair() {
+	acpiRequest = 0;
 	rec = 1;
 	diagnostic = 0;
 	safeMode = 0;
-	bootcount = 0;
-	successfulboot = 0;
+	earlycons = 0;
+	successfulboot = bootcount;
 	bool hasError = 0;
 
 	clearScreen();
@@ -2699,11 +2809,12 @@ void AutoRepair() {
 }
 
 void recoveryEnv() {
+	acpiRequest = 0;
 	rec = 1;
 	diagnostic = 0;
 	safeMode = 0;
-	bootcount = 0;
-	successfulboot = 0;
+	earlycons = 0;
+	successfulboot = bootcount;
 
 	clearScreen();
 	setColor("1f");
@@ -2730,7 +2841,7 @@ void recoveryEnv() {
 	case '3': imageRecovery(); break;
 	case '4':
 		rec = 1;
-		interfaceScreen();
+		SMSS();
 		return;
 	case '5': memoryDiag(); break;
 	case '6': bootMenu(); return;
@@ -2882,176 +2993,180 @@ void memoryDiag() {
 // =====================================================================
 
 void logonScreen() {
-	currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
-	CurrentPath = sysProf;
-	acpiRequest = 0;
-	vector<string> users;
-	users.push_back("Shutdown");
-	users.push_back("Reboot");
-	users.push_back("Rebootemer");
+	while (true) {
+		currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
+		CurrentPath = sysProf;
+		acpiRequest = 0;
+		vector<string> users;
+		users.push_back("Shutdown");
+		users.push_back("Reboot");
+		users.push_back("Rebootemer");
 
-	if (fileExists(kernelPath)) {
-		string kernel = readFile(kernelPath);
-		istringstream iss(kernel);
-		string line;
-		while (getline(iss, line)) {
-			line = trim(line);
-			if (line.empty()) continue;
-			size_t eqPos = line.find('=');
-			if (eqPos != string::npos) {
-				string username = trim(line.substr(0, eqPos));
-				if (!username.empty() && username != "SYSTEM" && username != "SYSTEM ADMINISTRATOR") {
-					users.push_back(username);
+		if (fileExists(kernelPath)) {
+			string kernel = readFile(kernelPath);
+			istringstream iss(kernel);
+			string line;
+			while (getline(iss, line)) {
+				line = trim(line);
+				if (line.empty()) continue;
+				size_t eqPos = line.find('=');
+				if (eqPos != string::npos) {
+					string username = trim(line.substr(0, eqPos));
+					if (!username.empty() && username != "SYSTEM" && username != "SYSTEM ADMINISTRATOR") {
+						users.push_back(username);
+					}
 				}
 			}
+			users.insert(users.begin(), "SYSTEM ADMINISTRATOR");
+			users.insert(users.begin(), "SYSTEM");
 		}
-		users.insert(users.begin(), "SYSTEM ADMINISTRATOR");
-		users.insert(users.begin(), "SYSTEM");
-	}
 
-	int selected = 3;
-	if (selected >= (int)users.size()) selected = 0;
-	clearScreen();
-	setColor("5b");
+		int selected = 3;
+		if (selected >= (int)users.size()) selected = 0;
+		clearScreen();
+		setColor("5b");
+		SuccessAuth = 0;
 
-	cout << "======================================================================================================================" << endl;
-	cout << "                                              " << getOSName() << " LOGON" << endl;
-	cout << "======================================================================================================================" << endl;
-	cout << "  Use UP/DOWN arrows to select, ENTER to confirm, ESC for Shutdown" << endl;
-	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-	cout << endl;
-	int listStartY = 6;
-	for (int i = 0; i < (int)users.size(); i++) {
-		cout << "    ";
-		if (users[i] == "Shutdown") {
-			cout << "[SHUTDOWN] Turn off ARSLANIUS" << endl;
-		}
-		else if (users[i] == "Reboot") {
-			cout << "[REBOOT] Restart ARSLANIUS" << endl;
-		}
-		else if (users[i] == "Rebootemer") {
-			cout << "[EMERGENCY REBOOT] Force restart ARSLANIUS" << endl;
-		}
-		else if (users[i] == "SYSTEM") {
-			cout << "BarOS AUTHORITY\\SYSTEM (System Account)" << endl;
-		}
-		else if (users[i] == "SYSTEM ADMINISTRATOR") {
-			cout << "SYSTEM ADMINISTRATOR (Administrator)" << endl;
-		}
-		else {
-			cout << users[i] << endl;
-		}
-	}
-
-	cout << endl;
-	cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-	cout << "  Attempts: " << loginAttempts << " / " << MAX_LOGIN_ATTEMPTS << endl;
-	cout << "======================================================================================================================" << endl;
-
-	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-	CONSOLE_SCREEN_BUFFER_INFO csbi;
-	GetConsoleScreenBufferInfo(hConsole, &csbi);
-
-	auto setArrow = [&](int pos, bool active) {
-		COORD coord;
-		coord.X = 0;
-		coord.Y = listStartY + pos;
-		SetConsoleCursorPosition(hConsole, coord);
-		if (active) {
-			SetConsoleTextAttribute(hConsole, 0x5F);
-			cout << "  > ";
-		}
-		else {
-			SetConsoleTextAttribute(hConsole, 0x5B);
+		cout << "======================================================================================================================" << endl;
+		cout << "                                              " << getOSName() << " LOGON" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << "  Use UP/DOWN arrows to select, ENTER to confirm, ESC for Shutdown" << endl;
+		cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+		cout << endl;
+		int listStartY = 6;
+		for (int i = 0; i < (int)users.size(); i++) {
 			cout << "    ";
-		}
-		SetConsoleTextAttribute(hConsole, 0x5B);
-		};
-	setArrow(selected, true);
-
-	while (true) {
-		int key = _getch();
-
-		if (key == 224) {
-			key = _getch();
-			int oldSelected = selected;
-
-			if (key == 72) {
-				selected--;
-				if (selected < 0) selected = (int)users.size() - 1;
+			if (users[i] == "Shutdown") {
+				cout << "[SHUTDOWN] Turn off ARSLANIUS" << endl;
 			}
-			else if (key == 80) {
-				selected++;
-				if (selected >= (int)users.size()) selected = 0;
+			else if (users[i] == "Reboot") {
+				cout << "[REBOOT] Restart ARSLANIUS" << endl;
 			}
-			if (selected != oldSelected) {
-				setArrow(oldSelected, false);
-				setArrow(selected, true);
+			else if (users[i] == "Rebootemer") {
+				cout << "[EMERGENCY REBOOT] Force restart ARSLANIUS" << endl;
+			}
+			else if (users[i] == "SYSTEM") {
+				cout << "BarOS AUTHORITY\\SYSTEM (System Account)" << endl;
+			}
+			else if (users[i] == "SYSTEM ADMINISTRATOR") {
+				cout << "SYSTEM ADMINISTRATOR (Administrator)" << endl;
+			}
+			else {
+				cout << users[i] << endl;
 			}
 		}
-		else if (key == 13) {  // Enter
-			u_in = users[selected];
 
-			if (u_in == "Shutdown") {
+		cout << endl;
+		cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+		cout << "  Attempts: " << loginAttempts << " / " << MAX_LOGIN_ATTEMPTS << endl;
+		cout << "======================================================================================================================" << endl;
+
+		HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+		CONSOLE_SCREEN_BUFFER_INFO csbi;
+		GetConsoleScreenBufferInfo(hConsole, &csbi);
+
+		auto setArrow = [&](int pos, bool active) {
+			COORD coord;
+			coord.X = 0;
+			coord.Y = listStartY + pos;
+			SetConsoleCursorPosition(hConsole, coord);
+			if (active) {
+				SetConsoleTextAttribute(hConsole, 0x5F);
+				cout << "  > ";
+			}
+			else {
+				SetConsoleTextAttribute(hConsole, 0x5B);
+				cout << "    ";
+			}
+			SetConsoleTextAttribute(hConsole, 0x5B);
+			};
+		setArrow(selected, true);
+
+		bool exitLogon = 0;
+		while (!exitLogon) {
+			int key = _getch();
+
+			if (key == 224) {
+				key = _getch();
+				int oldSelected = selected;
+
+				if (key == 72) {
+					selected--;
+					if (selected < 0) selected = (int)users.size() - 1;
+				}
+				else if (key == 80) {
+					selected++;
+					if (selected >= (int)users.size()) selected = 0;
+				}
+				if (selected != oldSelected) {
+					setArrow(oldSelected, false);
+					setArrow(selected, true);
+				}
+			}
+			else if (key == 13) {  // Enter
+				u_in = users[selected];
+
+				if (u_in == "Shutdown") {
+					writeLog("SHUTDOWN_FROM_LOGON");
+					acpiRequest = 1;
+					shutdownScreen();
+					return;
+				}
+				if (u_in == "Reboot") {
+					writeLog("REBOOT_FROM_LOGON");
+					acpiRequest = 2;
+					shutdownScreen();
+					return;
+				}
+				if (u_in == "Rebootemer") {
+					writeLog("EMERGENCY_REBOOT_FROM_LOGON");
+					arslogon("emergency_reboot");
+					return;
+				}
+
+				failFile = sysServices + "\\fail_" + u_in + ".cnt";
+				if (fileExists(failFile)) {
+					ifstream f(failFile);
+					f >> loginAttempts;
+				}
+
+				if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+					bsod("9");
+					return;
+				}
+
+				COORD promptCoord;
+				promptCoord.X = 0;
+				promptCoord.Y = listStartY + (int)users.size() + 4;
+				SetConsoleCursorPosition(hConsole, promptCoord);
+
+				cout << "Password for " << u_in << ": ";
+				char ch;
+				p_in = "";
+				while ((ch = _getch()) != '\r') {
+					if (ch == '\b') {
+						if (!p_in.empty()) {
+							p_in.pop_back();
+							cout << "\b \b";
+						}
+					}
+					else {
+						p_in += ch;
+						cout << '*';
+					}
+				}
+				cout << endl;
+
+				arslogon("authorization");
+				if (SuccessAuth) return;
+				exitLogon = 1;
+			}
+			else if (key == 27) {
 				writeLog("SHUTDOWN_FROM_LOGON");
 				acpiRequest = 1;
 				shutdownScreen();
 				return;
 			}
-			if (u_in == "Reboot") {
-				writeLog("REBOOT_FROM_LOGON");
-				acpiRequest = 2;
-				shutdownScreen();
-				return;
-			}
-			if (u_in == "Rebootemer") {
-				writeLog("EMERGENCY_REBOOT_FROM_LOGON");
-				arslogon("emergency_reboot");
-				return;
-			}
-
-			failFile = sysServices + "\\fail_" + u_in + ".cnt";
-			if (fileExists(failFile)) {
-				ifstream f(failFile);
-				f >> loginAttempts;
-			}
-
-			if (loginAttempts >= MAX_LOGIN_ATTEMPTS) {
-				bsod("9");
-				return;
-			}
-
-			COORD promptCoord;
-			promptCoord.X = 0;
-			promptCoord.Y = listStartY + (int)users.size() + 4;
-			SetConsoleCursorPosition(hConsole, promptCoord);
-
-			cout << "Password for " << u_in << ": ";
-			char ch;
-			p_in = "";
-			while ((ch = _getch()) != '\r') {
-				if (ch == '\b') {
-					if (!p_in.empty()) {
-						p_in.pop_back();
-						cout << "\b \b";
-					}
-				}
-				else {
-					p_in += ch;
-					cout << '*';
-				}
-			}
-			cout << endl;
-
-			arslogon("authorization");
-			return;
-
-		}
-		else if (key == 27) {
-			writeLog("SHUTDOWN_FROM_LOGON");
-			acpiRequest = 1;
-			shutdownScreen();
-			return;
 		}
 	}
 }
@@ -3102,7 +3217,6 @@ void arslogon(string_view authority) {
 				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 				cout << "[ ERROR ] User not found." << endl;
 				pause();
-				logonScreen();
 				return;
 			}
 		}
@@ -3116,7 +3230,7 @@ void arslogon(string_view authority) {
 
 		if (inputHash == storedHash) {
 			// Success
-			resumeScreenShown = 0;
+			SuccessAuth = 1;
 			if (!requestFromResume) {
 				fs::remove(failFile);
 
@@ -3149,10 +3263,9 @@ void arslogon(string_view authority) {
 				cout << "[ ERROR ] Login denied by the system" << endl;
 				pause();
 				if (!requestFromResume) {
-					logonScreen();
+					return;
 				}
 				else {
-					resumeScreenShown = 1;
 					BarOSkrnl("resume");
 				}
 			}
@@ -3160,10 +3273,9 @@ void arslogon(string_view authority) {
 				cout << "[ ERROR ] Login denied by registry policy" << endl;
 				pause();
 				if (!requestFromResume) {
-					logonScreen();
+					return;
 				}
 				else {
-					resumeScreenShown = 1;
 					BarOSkrnl("resume");
 				}
 			}
@@ -3171,10 +3283,9 @@ void arslogon(string_view authority) {
 				cout << "[ ERROR ] Login for service accounts is prohibited." << endl;
 				pause();
 				if (!requestFromResume) {
-					logonScreen();
+					return;
 				}
 				else {
-					resumeScreenShown = 1;
 					BarOSkrnl("resume");
 				}
 			}
@@ -3258,7 +3369,7 @@ void arslogon(string_view authority) {
 				fs::remove(configRoot + "\\hibernate.sys");
 			}
 			requestFromResume = 0;
-			applyColor();
+			return;
 		}
 		else {
 			if (!requestFromResume) {
@@ -3266,6 +3377,7 @@ void arslogon(string_view authority) {
 				ofstream f(failFile);
 				f << loginAttempts;
 				f.close();
+				SuccessAuth = 0;
 
 				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 				cout << "[ ERROR ] Password incorrect. (Attempt " << loginAttempts << "/" << MAX_LOGIN_ATTEMPTS << ")" << endl;
@@ -3274,14 +3386,13 @@ void arslogon(string_view authority) {
 					return;
 				}
 				pause();
-				logonScreen();
+				return;
 			}
 			else {
 				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 				cout << "[ ERROR ] Password incorrect." << endl;
 				pause();
-				resumeScreenShown = 1;
-				BarOSkrnl("resume");
+				return;
 			}
 		}
 	}
@@ -3344,10 +3455,10 @@ void arslogon(string_view authority) {
 		}
 		cout << ch << endl;
 		switch (ch) {
-		case '1': acpiRequest = 0; arslogon("logoutRequest"); break;
+		case '1': core("lock"); return;
 		case '2': clearScreen(); core("passwd"); return;
-		case '3': acpiRequest = 1; arslogon("logoutRequest"); break;
-		case '4': acpiRequest = 2; arslogon("logoutRequest"); break;
+		case '3': core("shutdown"); return;
+		case '4': core("reboot"); return;
 		case '5': clearScreen(); core("help"); return;
 		case '6': clearScreen(); return;
 		}
@@ -3358,6 +3469,7 @@ void arslogon(string_view authority) {
 		cout << "\n\n                                                  " << getOSName() << "\n\n";
 		pause();
 		applyColor();
+		return;
 	}
 	if (authority == "logoutRequest") {
 		clearScreen();
@@ -3374,14 +3486,7 @@ void arslogon(string_view authority) {
 		ss << "ENABLE_AUTORUN=" << autorun << endl;
 		writeFile(ConfigPath, ss.str());
 		Sleep(2000);
-		if (acpiRequest == 1) shutdownScreen();
-		else if (acpiRequest == 2) shutdownScreen();
-		else {
-			currentUser = "SYSTEM";
-			CurrentPath = sysProf;
-			logonScreen();
-			return;
-		}
+		return;
 	}
 	if (authority == "emergency_reboot") {
 		clearScreen();
@@ -3412,7 +3517,6 @@ void applyColor() {
 	if (fileExists(ConfigPath)) {
 		setColor(color_user);
 	}
-	interfaceScreen();
 }
 
 // =====================================================================
@@ -3421,7 +3525,7 @@ void applyColor() {
 
 void interfaceScreen() {
 	clearScreen();
-	if (currentUser != "KERNEL") saveBCD();
+	if (currentUser != "KERNEL") { successfulboot = bootcount; saveBCD(); }
 	if (currentUser.find("LogonAuthorityUser") != string::npos) {
 		cout << "CRITICAL ERROR: Access for restricted service accounts is prohibited." << endl;
 		pause();
@@ -3508,7 +3612,6 @@ void interfaceScreen() {
 			fs::remove(alertFile);
 			writeLog("ALERT_VIEVED: " + currentUser);
 			applyColor();
-			interfaceScreen();
 		}
 		string mailFile = userHome + "\\mail.txt";
 		if (fileExists(mailFile)) {
@@ -3785,7 +3888,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
 		bool allowed = false;
-		vector<string> tiCmds = { "help", "mv", "bcdboot", "license", "hibernate", "cp", "rm", "touch", "edit",
+		vector<string> tiCmds = { "help", "mv", "text_to_sha256", "bcdboot", "license", "hibernate", "cp", "rm", "touch", "edit",
 								  "echo", "bcdedit", "mkdir", "ls", "cd", "cat", "ren",
 								  "reset", "reboot_to_recovery", "cls", "ver", "whoami",
 								  "events", "sfc", "adduser", "deluser", "regedit",
@@ -3847,7 +3950,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "as-interpreter", "alias", "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "text_to_sha256", "as-interpreter", "alias", "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -3897,7 +4000,7 @@ void core(const string& cmd) {
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo, game.bsodrunner" << endl;
 		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
-		cout << "Admin: adduser, deluser, alert, Guest, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
+		cout << "Admin: adduser, deluser, alert, Guest, text_to_sha256, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
 	else if (ex_c == "ver") cout << getOSName() << " [Build " << currentBuild << "]" << endl;
@@ -4040,6 +4143,18 @@ void core(const string& cmd) {
 		writeFile(sysAlert, alertText);
 		writeLog("ALERT_SENT: " + alertText);
 		cout << "[ OK ] Alert deployed to all users." << endl;
+	}
+	else if (ex_c == "text_to_sha256") {
+		string text;
+		cout << "Text to convert: ";
+		getline(cin, text);
+		text = trim(text);
+		if (text.empty()) {
+			cout << "[ ERROR ] Text cannot be empty." << endl;
+			return;
+		}
+		string output = calculateHash(text);
+		cout << "SHA256: " << output << endl;
 	}
 	else if (ex_c == "alias") {
 		string filename = userHome + "\\USER_DATA\\aliases.cfg";
@@ -4194,24 +4309,25 @@ void core(const string& cmd) {
 		cout << "[ OK ] Archive extracted." << endl;
 	}
 	else if (ex_c == "arsstore") {
-		clearScreen();
-		cout << "======================================================================================================================" << endl;
-		cout << "                                                    ARSLANIUS STORE[v2.0]" << endl;
-		cout << "======================================================================================================================" << endl;
-		cout << "Available Apps :" << endl;
-		cout << " [1] System Scanner(Utility)" << endl;
-		cout << " [2] NotePad Lite(Office)" << endl;
-		cout << " [3] Calc(Utility)" << endl;
-		cout << " [4] Exit Store" << endl;
-		cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-		cout << "Select number: ";
-		char choice = _getch();
-		cout << choice << endl;
-		if (choice == '1') installapp("1");
-		else if (choice == '2') installapp("2");
-		else if (choice == '3') installapp("3");
-		else if (choice == '4') return;
-		core("arsstore");
+		while (true) {
+			clearScreen();
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                    ARSLANIUS STORE[v2.0]" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "Available Apps :" << endl;
+			cout << " [1] System Scanner(Utility)" << endl;
+			cout << " [2] NotePad Lite(Office)" << endl;
+			cout << " [3] Calc(Utility)" << endl;
+			cout << " [4] Exit Store" << endl;
+			cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+			cout << "Select number: ";
+			char choice = _getch();
+			cout << choice << endl;
+			if (choice == '1') installapp("1");
+			else if (choice == '2') installapp("2");
+			else if (choice == '3') installapp("3");
+			else if (choice == '4') break;
+		}
 	}
 	else if (ex_c == "guest-toggle") {
 		cout << "Enable Guest Mode? (Y/N): ";
@@ -4512,6 +4628,7 @@ void core(const string& cmd) {
 	else if (ex_c == "shutdown") {
 		acpiRequest = 1;
 		arslogon("logoutRequest");
+		throw SessionEnd{ 1 };
 	}
 	else if (ex_c == "hibernate") {
 		BarOSkrnl("hibernate");
@@ -4519,10 +4636,12 @@ void core(const string& cmd) {
 	else if (ex_c == "reboot") {
 		acpiRequest = 2;
 		arslogon("logoutRequest");
+		throw SessionEnd{ 2 };
 	}
 	else if (ex_c == "lock") {
 		acpiRequest = 0;
 		arslogon("logoutRequest");
+		throw SessionEnd{ 0 };
 	}
 	else if (ex_c == "bsod") bsod("666");
 	else if (ex_c == "wait_mode") arslogon("waitMode");
@@ -4784,6 +4903,7 @@ void core(const string& cmd) {
 		recoveryRequest = 1;
 		acpiRequest = 2;
 		arslogon("logoutRequest");
+		throw SessionEnd{ 2 };
 	}
 	else if (ex_c == "edit") {
 		string ef, et;
@@ -5447,40 +5567,44 @@ void BarOSkrnl(string_view Kernel_mode) {
 				}
 			}
 		}
-		if (currentUser == "BarOS AUTHORITY\\LogonAuthorityUser") { requestFromResume = 0; logonScreen(); }
-		if (!resumeScreenShown) {
-			for (int i = 1; i <= 12; i++) {
-				clearScreen();
-				setColor("0f");
-				cout << "======================================================================================================================" << endl;
-				cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
-				cout << "======================================================================================================================" << endl;
-				cout << "                                                  Resuming " << getOSName() << "..." << endl;
-				cout << endl;
-				cout << "         Build: " << currentBuild << endl;
-				cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
-				cout << "         © Armsoup 2026" << endl;
-				cout << endl;
-				cout << "                                                     _____________" << endl;
+		setColor("0f");
+		for (int i = 1; i <= 12; i++) {
+			clearScreen();
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                  Resuming " << getOSName() << "..." << endl;
+			cout << endl;
+			cout << "         Build: " << currentBuild << endl;
+			cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
+			cout << "         © Armsoup 2026" << endl;
+			cout << endl;
+			cout << "                                                     _____________" << endl;
 
-				switch (i) {
-				case 12: cout << "                                                    |..           |" << endl; break;
-				case 11: cout << "                                                    |...          |" << endl; break;
-				case 10: cout << "                                                    | ...         |" << endl; break;
-				case 9: cout << "                                                    |  ...        |" << endl; break;
-				case 8: cout << "                                                    |   ...       |" << endl; break;
-				case 7: cout << "                                                    |    ...      |" << endl; break;
-				case 6: cout << "                                                    |     ...     |" << endl; break;
-				case 5: cout << "                                                    |      ...    |" << endl; break;
-				case 4: cout << "                                                    |       ...   |" << endl; break;
-				case 3: cout << "                                                    |        ...  |" << endl; break;
-				case 2: cout << "                                                    |         ... |" << endl; break;
-				case 1: cout << "                                                    |          ...|" << endl; break;
-				}
-				cout << "                                                     -------------" << endl;
-				Sleep(230);
+			switch (i) {
+			case 12: cout << "                                                    |..           |" << endl; break;
+			case 11: cout << "                                                    |...          |" << endl; break;
+			case 10: cout << "                                                    | ...         |" << endl; break;
+			case 9: cout << "                                                    |  ...        |" << endl; break;
+			case 8: cout << "                                                    |   ...       |" << endl; break;
+			case 7: cout << "                                                    |    ...      |" << endl; break;
+			case 6: cout << "                                                    |     ...     |" << endl; break;
+			case 5: cout << "                                                    |      ...    |" << endl; break;
+			case 4: cout << "                                                    |       ...   |" << endl; break;
+			case 3: cout << "                                                    |        ...  |" << endl; break;
+			case 2: cout << "                                                    |         ... |" << endl; break;
+			case 1: cout << "                                                    |          ...|" << endl; break;
 			}
+			cout << "                                                     -------------" << endl;
+			Sleep(230);
 		}
+		if (currentUser == "BarOS AUTHORITY\\LogonAuthorityUser") {
+			fs::remove(configRoot + "\\hibernate.sys");
+			requestFromResume = 0;
+			logonScreen();
+			return;
+		}
+
 		if (currentUser == "BarOS SERVICE\\TrustedInstaller" ||
 			currentUser == "BarOS SERVICE\\SysPulse" ||
 			currentUser == "BarOS SERVICE\\NetMonitor") {
@@ -5488,30 +5612,35 @@ void BarOSkrnl(string_view Kernel_mode) {
 			interfaceScreen();
 		}
 		if (currentUser == "BarOS AUTHORITY\\SYSTEM") currentUser = "SYSTEM";
-		clearScreen();
 		setColor("5b");
-		cout << "Enter password for " << currentUser << ": ";
-		// Hide password input
-		char ch;
-		p_in = "";
-		while ((ch = _getch()) != '\r') {
-			if (ch == '\b') {
-				if (!p_in.empty()) {
-					p_in.pop_back();
-					cout << "\b \b";
+		while (true) {
+			clearScreen();
+			cout << "Enter password for " << currentUser << ": ";
+			// Hide password input
+			char ch;
+			p_in = "";
+			while ((ch = _getch()) != '\r') {
+				if (ch == '\b') {
+					if (!p_in.empty()) {
+						p_in.pop_back();
+						cout << "\b \b";
+					}
+				}
+				else {
+					p_in += ch;
+					cout << '*';
 				}
 			}
-			else {
-				p_in += ch;
-				cout << '*';
-			}
+			cout << endl;
+			requestFromResume = 1;
+			arslogon("authorization");
+			if (!requestFromResume) break;
 		}
-		cout << endl;
-		requestFromResume = 1;
-		arslogon("authorization");
+		return;
 	}
 	if (Kernel_mode == "EARLY_LAUNCH_CONSOLE") {
-		interfaceScreen();
+		earlycons = 1;
+		SMSS();
 		return;
 	}
 	if (Kernel_mode == "reload") {
@@ -5541,7 +5670,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 2";
+	string Title = getOSName() + " Beta 3";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
