@@ -36,6 +36,8 @@ Features
 
 • System Image Backup and Recovery
 
+• SMSS - Session Manager Subsystem, each user creates a new thread
+
 • Memory Diagnostic tool
 
 • ARS Store (application installer - Scanner, NotePad Lite, Calc)
@@ -57,10 +59,14 @@ Features
 * * *
 Build numbering logic
 
-Build 257
+Build 288
 
 Initially, the number 243 was taken as the approximate total count of compilations, 
 but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
+
+• ARSLANIUS 31 Beta 2 - build 257
+
+• ARSLANIUS 31 Beta 3 - build 288
       
 * * *
 
