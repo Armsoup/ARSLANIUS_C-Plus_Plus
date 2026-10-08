@@ -38,6 +38,8 @@ Features
 
 • SMSS - Session Manager Subsystem, each user creates a new thread
 
+• Auto-updates - simply enter 'wu', and if updates are available, enter 'update-install'.
+
 • Memory Diagnostic tool
 
 • ARS Store (application installer - Scanner, NotePad Lite, Calc)
@@ -67,6 +69,8 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 • ARSLANIUS 31 Beta 2 - build 257
 
 • ARSLANIUS 31 Beta 3 - build 288
+
+• ARSLANIUS 31 RC - build 307
       
 * * *
 
