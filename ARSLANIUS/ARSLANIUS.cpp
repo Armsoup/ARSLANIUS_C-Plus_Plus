@@ -28,6 +28,7 @@
 #include "miniz.h"
 #include "arslanius.h"
 #include "BuildVersion.h"
+#include <winhttp.h>
 
 std::map<std::string, CommandHandler> driverCommands;
 ARSLANIUS_API g_api;
@@ -36,6 +37,7 @@ ARSLANIUS_API g_api;
 #pragma comment(lib, "psapi.lib")
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "ntdll.lib")
+#pragma comment(lib, "winhttp.lib")
 
 typedef struct _PEB64 {
 	BYTE Reserved1[2];
@@ -177,6 +179,8 @@ int lastSuccessfulMode = 0;
 int acpiRequest = 0;
 bool enableLua = 1;
 bool fastBoot = 1;
+DWORD threadSMSSid;
+DWORD oldSMSSid;
 string REG_VERSION_FOUND = "0";
 bool setup = 0;
 bool sudo_command = 0;
@@ -227,6 +231,13 @@ void memoryDiag();
 void logonScreen();
 void loader_errors(string_view code);
 void applyColor();
+string CheckForUpdates();
+string ParseTagName(const string& json);
+int ParseBuildNumber(const string& s);
+bool IsNewerAvailable(const string& remoteTag, const string& localBuild);
+void RunArsUpdateOnce();
+string ParseDownloadUrl(const string& json, const string& assetName);
+bool DownloadFile(const string& url, const string& destPath);
 void cmdLoop();
 void print_slow(string_view text, int delay);
 void check_AUTHORITY();
@@ -456,7 +467,12 @@ double evaluateWithVars(const string& expr, size_t& pos) {
 			while (pos < expr.length() && (isdigit(expr[pos]) || expr[pos] == '.')) {
 				num += expr[pos++];
 			}
-			values.push(stod(num));
+			try {
+				values.push(stod(num));
+			}
+			catch (...) {
+				cout << "ERROR: Invalid comparison" << endl;
+			}
 			continue;
 		}
 
@@ -1267,11 +1283,13 @@ void SMSS() {
 	setColor("0e");
 	Sleep(200);
 	while (true) {
-		HANDLE h = CreateThread(NULL, 0, SessionThread, NULL, 0, NULL);
-		if (h == NULL) {
+		threadSMSSid = NULL;
+		HANDLE h = CreateThread(NULL, 0, SessionThread, NULL, 0, &threadSMSSid);
+		if (h == NULL || oldSMSSid == threadSMSSid) {
 			clearScreen();
 			cout << "Critical error in the Session Manager subsystem! Further startup is impossible." << endl;
-			bsod("");
+			pause();
+			bsod("DIED");
 			return;
 		}
 		WaitForSingleObject(h, INFINITE);
@@ -1281,6 +1299,7 @@ void SMSS() {
 			shutdownScreen();
 			return;
 		}
+		oldSMSSid = threadSMSSid;
 	}
 }
 
@@ -1408,6 +1427,215 @@ void BSOD_Runner() {
 	char TEMP = _getch();
 	applyColor();
 	return;
+}
+
+string CheckForUpdates() {
+	HINTERNET hSession = WinHttpOpen(
+		L"ARSLANIUS-Update/1.0",
+		WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+		WINHTTP_NO_PROXY_NAME,
+		WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!hSession) return "";
+
+	HINTERNET hConnect = WinHttpConnect(
+		hSession,
+		L"api.github.com",
+		INTERNET_DEFAULT_HTTPS_PORT, 0);
+	if (!hConnect) { WinHttpCloseHandle(hSession); return ""; }
+
+	HINTERNET hRequest = WinHttpOpenRequest(
+		hConnect,
+		L"GET",
+		L"/repos/Armsoup/ARSLANIUS_C-Plus_Plus/releases/latest",
+		NULL, WINHTTP_NO_REFERER,
+		WINHTTP_DEFAULT_ACCEPT_TYPES,
+		WINHTTP_FLAG_SECURE);
+	if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return ""; }
+
+	WinHttpAddRequestHeaders(hRequest,
+		L"User-Agent: ARSLANIUS-Update",
+		-1L, WINHTTP_ADDREQ_FLAG_ADD);
+
+	if (!WinHttpSendRequest(hRequest,
+		WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+		WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return "";
+	}
+
+	if (!WinHttpReceiveResponse(hRequest, NULL)) {
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return "";
+	}
+
+	string response;
+	DWORD dwSize = 0;
+	do {
+		DWORD dwDownloaded = 0;
+		WinHttpQueryDataAvailable(hRequest, &dwSize);
+		if (dwSize == 0) break;
+		char* buffer = new char[dwSize + 1];
+		ZeroMemory(buffer, dwSize + 1);
+		WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded);
+		response += buffer;
+		delete[] buffer;
+	} while (dwSize > 0);
+
+	WinHttpCloseHandle(hRequest);
+	WinHttpCloseHandle(hConnect);
+	WinHttpCloseHandle(hSession);
+
+	return response;
+}
+
+string ParseTagName(const string& json) {
+	size_t pos = json.find("\"tag_name\":\"");
+	if (pos == string::npos) return "";
+	pos += 12;
+	size_t end = json.find('"', pos);
+	if (end == string::npos) return "";
+	return json.substr(pos, end - pos);
+}
+
+int ParseBuildNumber(const string& s) {
+	string digits;
+	for (char c : s) if (isdigit(c)) digits += c;
+	if (digits.empty()) return 0;
+	try { return stoi(digits); }
+	catch (...) { return 0; }
+}
+
+bool IsNewerAvailable(const string& remoteTag, const string& localBuild) {
+	int remote = ParseBuildNumber(remoteTag);
+	int local = ParseBuildNumber(localBuild);
+	return remote > local;
+}
+
+void RunArsUpdateOnce() {
+	string json = CheckForUpdates();
+	if (json.empty()) {
+		writeLog("BarOS SERVICE\\ARSUpdate: Check failed (no response)");
+		return;
+	}
+	string tag = ParseTagName(json);
+	if (tag.empty()) {
+		writeLog("BarOS SERVICE\\ARSUpdate: Check failed (no tag)");
+		return;
+	}
+	if (IsNewerAvailable(tag, currentBuild)) {
+		writeLog("BarOS SERVICE\\ARSUpdate: New version available: " + tag);
+		writeFile(configRoot + "\\update.available", tag);
+	}
+	else {
+		writeLog("BarOS SERVICE\\ARSUpdate: Up to date (" + currentBuild + ")");
+	}
+}
+
+string ParseDownloadUrl(const string& json, const string& assetName) {
+	string needle = "\"name\":\"" + assetName + "\"";
+	size_t pos = json.find(needle);
+	if (pos == string::npos) return "";
+
+	size_t urlPos = json.find("\"browser_download_url\":\"", pos);
+	if (urlPos == string::npos) return "";
+	urlPos += 24;
+
+	size_t end = json.find('"', urlPos);
+	if (end == string::npos) return "";
+
+	string url = json.substr(urlPos, end - urlPos);
+
+	string clean;
+	for (size_t i = 0; i < url.size(); i++) {
+		if (url[i] == '\\' && i + 1 < url.size() && url[i + 1] == '/') {
+			continue;
+		}
+		clean += url[i];
+	}
+	return clean;
+}
+
+bool DownloadFile(const string& url, const string& destPath) {
+	bool https = url.find("https://") == 0;
+	string rest = url.substr(https ? 8 : 7);
+	size_t slash = rest.find('/');
+	if (slash == string::npos) return false;
+	wstring host(rest.begin(), rest.begin() + slash);
+	wstring path(rest.begin() + slash, rest.end());
+
+	HINTERNET hSession = WinHttpOpen(L"ARSLANIUS-Update/1.0",
+		WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+		WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!hSession) return false;
+
+	HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(),
+		https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
+	if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+	HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+		NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+		https ? WINHTTP_FLAG_SECURE : 0);
+	if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+
+	WinHttpAddRequestHeaders(hRequest, L"User-Agent: ARSLANIUS-Update",
+		-1L, WINHTTP_ADDREQ_FLAG_ADD);
+
+	if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+		WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return false;
+	}
+	if (!WinHttpReceiveResponse(hRequest, NULL)) {
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return false;
+	}
+	DWORD statusCode = 0;
+	DWORD size = sizeof(statusCode);
+	WinHttpQueryHeaders(hRequest,
+		WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+		WINHTTP_HEADER_NAME_BY_INDEX,
+		&statusCode, &size, WINHTTP_NO_HEADER_INDEX);
+	if (statusCode != 200) {
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return false;
+	}
+
+	ofstream out(destPath, ios::binary);
+	if (!out.is_open()) { 
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return false;
+	}
+
+	DWORD dwSize = 0;
+	do {
+		DWORD dwDownloaded = 0;
+		WinHttpQueryDataAvailable(hRequest, &dwSize);
+		if (dwSize == 0) break;
+		char* buffer = new char[dwSize];
+		if (WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
+			out.write(buffer, dwDownloaded);
+		}
+		delete[] buffer;
+	} while (dwSize > 0);
+
+	out.close();
+	WinHttpCloseHandle(hRequest);
+	WinHttpCloseHandle(hConnect);
+	WinHttpCloseHandle(hSession);
+
+	return fileExists(destPath);
 }
 
 void installapp(string_view app_id) {
@@ -1924,7 +2152,7 @@ void Manual() {
 	cout << "  - Auto-boot in " << bootTimeout << " seconds" << endl;
 	cout << endl;
 	cout << "[ COMMANDS ]" << endl;
-	cout << "  System: help, lock, alias, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
+	cout << "  System: help, lock, alias, wu, update-install, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
 	cout << "  Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
 	cout << "  Admin: adduser, text_to_sha256, deluser, passwd, regedit, bcdedit, bcdboot, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
@@ -1938,7 +2166,7 @@ void Manual() {
 	cout << "======================================================================================================================" << endl;
 	pause();
 	bootcount--;
-	bootMenu();
+	return;
 }
 
 void Update() {
@@ -1969,7 +2197,7 @@ void Update() {
 		writeFile(regPath, reg_update.str());
 	}
 	bootcount--;
-	bootMenu();
+	return;
 }
 
 void ensureDirectories() {
@@ -2318,7 +2546,7 @@ void bsod(string_view code) {
 		print_slow("*** File: \\ARSLANIUS.exe", 2);
 		cout << endl;
 		print_slow("Technical information:", 2);
-		print_slow("*** ArsLogon died", 2);
+		print_slow("*** Critical process died", 2);
 		cout << endl;
 		print_slow("If this is the first time you've seen this error, restart the system.", 2);
 		cout << endl;
@@ -2394,57 +2622,53 @@ void bootMenu() {
 	safeMode = 0;
 	earlycons = 0;
 	if (setup) {
-		setColor("1f");
-		cout << "======================================================================================================================" << endl;
-		cout << "                                                        " << getOSName() << endl;
-		cout << "                                                  Copyright © 2026 Armsoup" << endl;
-		cout << "======================================================================================================================" << endl;
-		cout << endl;
-		cout << "This program is FREE SOFTWARE under the GNU AGPL - 3.0 license." << endl;
-		cout << endl;
-		cout << "You MAY:" << endl;
-		cout << " -Use it for any purpose" << endl;
-		cout << " -Modify it" << endl;
-		cout << " -Distribute it" << endl;
-		cout << endl;
-		cout << "You MUST:" << endl;
-		cout << " -Keep the original copyright notice(© Armsoup)" << endl;
-		cout << " -Disclose ALL source code(including your changes)" << endl;
-		cout << " -License your modified version under AGPL - 3.0 as well" << endl;
-		cout << endl;
-		cout << "======================================================================================================================" << endl;
-		cout << "!WARNING!" << endl;
-		cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
-		cout << " -Your license is automatically TERMINATED" << endl;
-		cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
-		cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
-		cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
-		cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
-		cout << endl;
-		cout << "Full license: https://www.gnu.org/licenses/agpl-3.0.html" << endl;
-		cout << "or: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus?tab=AGPL-3.0-1-ov-file" << endl;
-		cout << "Type 'license' on command line to view this again" << endl;
-		cout << "======================================================================================================================" << endl;
-		cout << "You Agree?: ";
-		char choice_license = _getch();
-		choice_license = tolower(choice_license);
-		cout << choice_license << endl;
-		switch (choice_license) {
-		case 'y': {
-			clearScreen(); break;
-		}
-		case 'n': {
-			exit(1); break;
-		}
-		}
-		cout << "Welcome to OOBE " << getOSName() << "! Do you want to start?" << endl;
-		cout << "Y/N: ";
-		char choice = _getch();
-		choice = tolower(choice);
-		cout << choice << endl;
-
-		switch (choice) {
-		case 'y': {
+		bool oobe_done = 0;
+		while (!oobe_done) {
+			setColor("1f");
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                        " << getOSName() << endl;
+			cout << "                                                  Copyright © 2026 Armsoup" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << endl;
+			cout << "This program is FREE SOFTWARE under the GNU AGPL - 3.0 license." << endl;
+			cout << endl;
+			cout << "You MAY:" << endl;
+			cout << " -Use it for any purpose" << endl;
+			cout << " -Modify it" << endl;
+			cout << " -Distribute it" << endl;
+			cout << endl;
+			cout << "You MUST:" << endl;
+			cout << " -Keep the original copyright notice(© Armsoup)" << endl;
+			cout << " -Disclose ALL source code(including your changes)" << endl;
+			cout << " -License your modified version under AGPL - 3.0 as well" << endl;
+			cout << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "!WARNING!" << endl;
+			cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
+			cout << " -Your license is automatically TERMINATED" << endl;
+			cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
+			cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
+			cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
+			cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
+			cout << endl;
+			cout << "Full license: https://www.gnu.org/licenses/agpl-3.0.html" << endl;
+			cout << "or: https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus?tab=AGPL-3.0-1-ov-file" << endl;
+			cout << "Type 'license' on command line to view this again" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "You Agree?: ";
+			char choice_license = _getch();
+			choice_license = tolower(choice_license);
+			cout << choice_license << endl;
+			if (choice_license == 'n') exit(1);
+			if (choice_license != 'y') continue;
+			clearScreen();
+			cout << "Welcome to OOBE " << getOSName() << "! Do you want to start?" << endl;
+			cout << "Y/N: ";
+			char choice = _getch();
+			choice = tolower(choice);
+			cout << choice << endl;
+			if (choice == 'n') exit(1);
+			if (choice != 'y') continue;
 			cout << "Preparing ARSLANIUS..." << endl;
 			Sleep(2000);
 			PlaySound(MAKEINTRESOURCE(IDR_WAVE1), GetModuleHandle(NULL), SND_RESOURCE | SND_ASYNC | SND_LOOP);
@@ -2498,102 +2722,99 @@ void bootMenu() {
 			cout << "[ OK ] Everything is ready to go." << endl;
 			pause();
 			PlaySound(NULL, NULL, 0);
-			bootMenu(); break;
-		}
-		case 'n': {
-			exit(1); break;
-		}
-		default: bootMenu();
-		}
-		bootMenu();
-	}
-	if (fileExists(configRoot + "\\hibernate.sys")) {
-		clearScreen();
-		setColor("0f");
-		cout << "Do you want to resume from hibernate.sys?" << endl;
-		cout << "Y/N: ";
-		char choice = _getch();
-		choice = tolower(choice);
-		cout << choice << endl;
-
-		switch (choice) {
-		case 'y': {
-			requestFromResume = 1;
-			SMSS();
-			break;
-		}
+			oobe_done = 1;
 		}
 	}
+	while (true) {
+		if (fileExists(configRoot + "\\hibernate.sys")) {
+			clearScreen();
+			setColor("0f");
+			cout << "Do you want to resume from hibernate.sys?" << endl;
+			cout << "Y/N: ";
+			char choice = _getch();
+			choice = tolower(choice);
+			cout << choice << endl;
 
-	if (!recoveryRequest) {
-		clearScreen();
-		setColor("0f");
-		rec = 0;
-		cout << "======================================================================================================================" << endl;
-		cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
-		cout << "======================================================================================================================" << endl;
-		if (lastSuccessfulMode != 0) {
-			cout << "  Last Known Good Configuration [Mode " << lastSuccessfulMode << "]" << endl;
-		}
-		cout << "  1. Start ARSLANIUS Normally" << endl;
-		cout << "  2. Safe Mode [No Services / No Autorun]" << endl;
-		cout << "  3. Recovery Environment" << endl;
-		cout << "  4. Diagnostic Mode LOCAL" << endl;
-		cout << "  5. Diagnostic Mode NETWORK" << endl;
-		cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
-		cout << "  Auto-boot in " << bootTimeout << " seconds..." << endl;
-		cout << "  Press 6 for Manual" << endl;
-		cout << "  Press 7 for update from old version" << endl;
-		cout << "======================================================================================================================" << endl;
-
-		// Simple timed input
-		cout << "Select option (1-7): ";
-
-		// Simulate auto-boot with sleep
-		DWORD64 startTime = GetTickCount64();
-		bool keyPressed = false;
-		char choice = defaultMode; // default
-
-		while (GetTickCount64() - startTime < (DWORD64)(bootTimeout * 1000)) {
-			if (_kbhit()) {
-				choice = _getch();
-				keyPressed = true;
+			switch (choice) {
+			case 'y': {
+				requestFromResume = 1;
+				SMSS();
 				break;
 			}
-			Sleep(100);
+			}
 		}
 
-		if (!keyPressed) {
-			choice = '0' + defaultMode;
+		if (!recoveryRequest) {
+			clearScreen();
+			setColor("0f");
+			rec = 0;
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
+			cout << "======================================================================================================================" << endl;
+			if (lastSuccessfulMode != 0) {
+				cout << "  Last Known Good Configuration [Mode " << lastSuccessfulMode << "]" << endl;
+			}
+			cout << "  1. Start ARSLANIUS Normally" << endl;
+			cout << "  2. Safe Mode [No Services / No Autorun]" << endl;
+			cout << "  3. Recovery Environment" << endl;
+			cout << "  4. Diagnostic Mode LOCAL" << endl;
+			cout << "  5. Diagnostic Mode NETWORK" << endl;
+			cout << "----------------------------------------------------------------------------------------------------------------------" << endl;
+			cout << "  Auto-boot in " << bootTimeout << " seconds..." << endl;
+			cout << "  Press 6 for Manual" << endl;
+			cout << "  Press 7 for update from old version" << endl;
+			cout << "======================================================================================================================" << endl;
+
+			// Simple timed input
+			cout << "Select option (1-7): ";
+
+			// Simulate auto-boot with sleep
+			DWORD64 startTime = GetTickCount64();
+			bool keyPressed = false;
+			char choice = defaultMode; // default
+
+			while (GetTickCount64() - startTime < (DWORD64)(bootTimeout * 1000)) {
+				if (_kbhit()) {
+					choice = _getch();
+					keyPressed = true;
+					break;
+				}
+				Sleep(100);
+			}
+
+			if (!keyPressed) {
+				choice = '0' + defaultMode;
+			}
+			cout << choice << endl;
+
+			if (choice == '1') bootChoice = 1;
+			else if (choice == '2') bootChoice = 2;
+			else if (choice == '3') bootChoice = 3;
+			else if (choice == '4') bootChoice = 4;
+			else if (choice == '5') bootChoice = 5;
+			else if (choice == '6') { Manual(); continue; }
+			else if (choice == '7') { Update(); continue; }
+			else bootChoice = defaultMode;
+
+			if (!fileExists(configRoot + "\\BCD")) {
+				loader_errors("14");
+			};
+			check_BCD();
 		}
-		cout << choice << endl;
+		saveBCD();
+		loadBCD();
 
-		if (choice == '1') bootChoice = 1;
-		else if (choice == '2') bootChoice = 2;
-		else if (choice == '3') bootChoice = 3;
-		else if (choice == '4') bootChoice = 4;
-		else if (choice == '5') bootChoice = 5;
-		else if (choice == '6') Manual();
-		else if (choice == '7') Update();
-		else bootChoice = defaultMode;
-
-		if (!fileExists(configRoot + "\\BCD")) {
-			loader_errors("14");
-		};
-		check_BCD();
+		if (bootChoice == 3) {
+			recoveryRequest = 1;
+			bootChoice = 1;
+		}
+		if (recoveryRequest) bootChoice = 1;
+		if (bootChoice == 1) normalBoot();
+		else if (bootChoice == 2) safeModeBoot();
+		else if (bootChoice == 4) diagnosticMode(1);
+		else if (bootChoice == 5) diagnosticMode(2);
+		return;
 	}
-	saveBCD();
-	loadBCD();
-
-	if (bootChoice == 3) {
-		recoveryRequest = 1;
-		bootChoice = 1;
-	}
-	if (recoveryRequest) bootChoice = 1;
-	if (bootChoice == 1) normalBoot();
-	else if (bootChoice == 2) safeModeBoot();
-	else if (bootChoice == 4) diagnosticMode(1);
-	else if (bootChoice == 5) diagnosticMode(2);
 }
 
 void normalBoot() {
@@ -2731,6 +2952,7 @@ void safeModeBoot() {
 	fs::remove(sysServices + "\\SysPulse.active");
 	fs::remove(sysServices + "\\TrustedInstaller.active");
 	fs::remove(sysServices + "\\NetMonitor.active");
+	fs::remove(sysServices + "\\ARSUpdate.active");
 
 	successfulboot++;
 	SMSS();
@@ -2748,11 +2970,13 @@ void diagnosticMode(int mode) {
 	if (mode == 1) {
 		fs::remove(sysServices + "\\TrustedInstaller.active");
 		fs::remove(sysServices + "\\NetMonitor.active");
+		fs::remove(sysServices + "\\ARSUpdate.active");
 		currentUser = "BarOS SERVICE\\SysPulse";
 	}
 	else if (mode == 2) {
 		fs::remove(sysServices + "\\SysPulse.active");
 		fs::remove(sysServices + "\\TrustedInstaller.active");
+		fs::remove(sysServices + "\\ARSUpdate.active");
 		currentUser = "BarOS SERVICE\\NetMonitor";
 	}
 
@@ -2770,40 +2994,42 @@ void AutoRepair() {
 	safeMode = 0;
 	earlycons = 0;
 	successfulboot = bootcount;
-	bool hasError = 0;
+	while (true) {
+		bool hasError = 0;
 
-	clearScreen();
-	setColor("3f");
-	if (!fileExists(kernelPath) || !fileExists(regPath) || !fileExists(bcdPath)) hasError = 1;
-	if (hasError) {
-		cout << "A potential problem has been found." << endl;
-		cout << "Your data will be erased after the restore." << endl;
-		cout << "Select an option:" << endl;
-		cout << " [1] Repair and erase data." << endl;
-		cout << " [2] Additional options" << endl;
-		cout << "Select option (1/2): ";
-		char choice = _getch();
-		cout << choice << endl;
+		clearScreen();
+		setColor("3f");
+		if (!fileExists(kernelPath) || !fileExists(regPath) || !fileExists(bcdPath)) hasError = 1;
+		if (hasError) {
+			cout << "A potential problem has been found." << endl;
+			cout << "Your data will be erased after the restore." << endl;
+			cout << "Select an option:" << endl;
+			cout << " [1] Repair and erase data." << endl;
+			cout << " [2] Additional options" << endl;
+			cout << "Select option (1/2): ";
+			char choice = _getch();
+			cout << choice << endl;
 
-		switch (choice) {
-		case '1': startupRepair(); break;
-		case '2': recoveryEnv(); break;
-		default: AutoRepair(); return;
+			switch (choice) {
+			case '1': startupRepair(); return;
+			case '2': recoveryEnv(); return;
+			default: continue;
+			}
 		}
-	}
-	else {
-		cout << "Automatic repair could not determine the cause of the error; the computer may have been started incorrectly." << endl;
-		cout << "Try restarting it." << endl;
-		cout << " [1] Restart the computer" << endl;
-		cout << " [2] Additional options" << endl;
-		cout << "Select option (1/2): ";
-		char choice = _getch();
-		cout << choice << endl;
+		else {
+			cout << "Automatic repair could not determine the cause of the error; the computer may have been started incorrectly." << endl;
+			cout << "Try restarting it." << endl;
+			cout << " [1] Restart the computer" << endl;
+			cout << " [2] Additional options" << endl;
+			cout << "Select option (1/2): ";
+			char choice = _getch();
+			cout << choice << endl;
 
-		switch (choice) {
-		case '1': saveBCD(); acpiRequest = 2; BarOSkrnl("ACPI"); break;
-		case '2': recoveryEnv(); break;
-		default: AutoRepair(); return;
+			switch (choice) {
+			case '1': saveBCD(); acpiRequest = 2; BarOSkrnl("ACPI"); return;
+			case '2': recoveryEnv(); return;
+			default: continue;
+			}
 		}
 	}
 }
@@ -2816,39 +3042,39 @@ void recoveryEnv() {
 	earlycons = 0;
 	successfulboot = bootcount;
 
-	clearScreen();
-	setColor("1f");
-	cout << "======================================================================================================================" << endl;
-	cout << "                                             ARSLANIUS RECOVERY ENVIRONMENT" << endl;
-	cout << "======================================================================================================================" << endl;
-	cout << endl;
-	cout << "  [1] Startup Repair        - Fix kernel/registry" << endl;
-	cout << "  [2] System Restore        - Go to restore points" << endl;
-	cout << "  [3] System Image Recovery - Restore from backup" << endl;
-	cout << "  [4] Command Line          - Mini cmd" << endl;
-	cout << "  [5] Memory Diagnostic     - Check system memory" << endl;
-	cout << "  [6] Return to boot menu" << endl;
-	cout << endl;
-	cout << "======================================================================================================================" << endl;
-	cout << "Select option (1-6): ";
+	while (true) {
+		clearScreen();
+		setColor("1f");
+		cout << "======================================================================================================================" << endl;
+		cout << "                                             ARSLANIUS RECOVERY ENVIRONMENT" << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << endl;
+		cout << "  [1] Startup Repair        - Fix kernel/registry" << endl;
+		cout << "  [2] System Restore        - Go to restore points" << endl;
+		cout << "  [3] System Image Recovery - Restore from backup" << endl;
+		cout << "  [4] Command Line          - Mini cmd" << endl;
+		cout << "  [5] Memory Diagnostic     - Check system memory" << endl;
+		cout << "  [6] Return to boot menu" << endl;
+		cout << endl;
+		cout << "======================================================================================================================" << endl;
+		cout << "Select option (1-6): ";
 
-	char choice = _getch();
-	cout << choice << endl;
+		char choice = _getch();
+		cout << choice << endl;
 
-	switch (choice) {
-	case '1': startupRepair(); break;
-	case '2': restoreMenu(); break;
-	case '3': imageRecovery(); break;
-	case '4':
-		rec = 1;
-		SMSS();
-		return;
-	case '5': memoryDiag(); break;
-	case '6': bootMenu(); return;
-	default: recoveryEnv(); return;
+		switch (choice) {
+		case '1': startupRepair(); break;
+		case '2': restoreMenu(); break;
+		case '3': imageRecovery(); break;
+		case '4':
+			rec = 1;
+			SMSS();
+			return;
+		case '5': memoryDiag(); break;
+		case '6': bootMenu(); return;
+		default: continue;
+		}
 	}
-
-	recoveryEnv();
 }
 
 void startupRepair() {
@@ -3109,13 +3335,13 @@ void logonScreen() {
 				if (u_in == "Shutdown") {
 					writeLog("SHUTDOWN_FROM_LOGON");
 					acpiRequest = 1;
-					shutdownScreen();
+					throw SessionEnd{ 1 };
 					return;
 				}
 				if (u_in == "Reboot") {
 					writeLog("REBOOT_FROM_LOGON");
 					acpiRequest = 2;
-					shutdownScreen();
+					throw SessionEnd{ 2 };
 					return;
 				}
 				if (u_in == "Rebootemer") {
@@ -3164,7 +3390,7 @@ void logonScreen() {
 			else if (key == 27) {
 				writeLog("SHUTDOWN_FROM_LOGON");
 				acpiRequest = 1;
-				shutdownScreen();
+				throw SessionEnd{ 1 };
 				return;
 			}
 		}
@@ -3186,6 +3412,27 @@ void arslogon(string_view authority) {
 			if (currentUser == "BarOS SERVICE\\TrustedInstaller" ||
 				currentUser == "BarOS SERVICE\\SysPulse" ||
 				currentUser == "BarOS SERVICE\\NetMonitor") interfaceScreen();
+			string command = p_in;
+			command = trim(command);
+			for (char& c : command) {
+				c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+			}
+
+			if (command == "reboot") {
+				requestFromResume = 0;
+				writeLog("REBOOT_FROM_LOGON");
+				acpiRequest = 2;
+				throw SessionEnd{ 2 };
+				return;
+			}
+			else if (command == "shutdown") {
+				requestFromResume = 0;
+				writeLog("SHUTDOWN_FROM_LOGON");
+				acpiRequest = 1;
+				throw SessionEnd{ 1 };
+				return;
+			}
+			else {}
 		}
 		string kernel = readFile(kernelPath);
 		istringstream iss(kernel);
@@ -3195,21 +3442,11 @@ void arslogon(string_view authority) {
 
 		while (getline(iss, line)) {
 			line = trim(line);
-			if (!requestFromResume) {
-				if (line.find(u_in + " =") == 0 || line.find(u_in + "=") == 0) {
-					size_t eqPos = line.find('=');
-					storedHash = trim(line.substr(eqPos + 1));
-					found = true;
-					break;
-				}
-			}
-			else {
-				if (line.find(currentUser + " =") == 0 || line.find(currentUser + "=") == 0) {
-					size_t eqPos = line.find('=');
-					storedHash = trim(line.substr(eqPos + 1));
-					found = true;
-					break;
-				}
+			if (line.find(u_in + " =") == 0 || line.find(u_in + "=") == 0) {
+				size_t eqPos = line.find('=');
+				storedHash = trim(line.substr(eqPos + 1));
+				found = true;
+				break;
 			}
 		}
 		if (!requestFromResume) {
@@ -3468,6 +3705,56 @@ void arslogon(string_view authority) {
 		setColor("0f");
 		cout << "\n\n                                                  " << getOSName() << "\n\n";
 		pause();
+		while (true) {
+			cout << "Enter password for " << currentUser << ": ";
+			// Hide password input
+			char ch;
+			p_in = "";
+			while ((ch = _getch()) != '\r') {
+				if (ch == '\b') {
+					if (!p_in.empty()) {
+						p_in.pop_back();
+						cout << "\b \b";
+					}
+				}
+				else {
+					p_in += ch;
+					cout << '*';
+				}
+			}
+			cout << endl;
+			string kernel = readFile(kernelPath);
+			istringstream iss(kernel);
+			string line;
+			bool found = 0;
+			string storedHash;
+
+			while (getline(iss, line)) {
+				line = trim(line);
+				if (line.find(currentUser + " =") == 0 || line.find(currentUser + "=") == 0) {
+					size_t eqPos = line.find('=');
+					storedHash = trim(line.substr(eqPos + 1));
+					found = 1;
+					break;
+				}
+			}
+			if (!found) {
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] Has your user... disappeared?" << endl;
+				pause();
+				core("lock");
+			}
+			string inputHash = calculateHash(p_in);
+
+			if (inputHash == storedHash) break;
+			else {
+				clearScreen();
+				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
+				cout << "[ ERROR ] Password incorrect." << endl;
+				pause();
+				continue;
+			}
+		}
 		applyColor();
 		return;
 	}
@@ -3549,12 +3836,18 @@ void interfaceScreen() {
 			writeFile(sysServices + "\\TrustedInstaller.active", "RUNNING");
 			Sleep(1000);
 		}
+		if (!fileExists(sysServices + "\\ARSUpdate.active")) {
+			cout << "[ KERNEL ] Booting background service: BarOS SERVICE\\ARSUpdate..." << endl;
+			writeFile(sysServices + "\\ARSUpdate.active", "RUNNING");
+			Sleep(1000);
+		}
 	}
 
 	if (rec) {
 		currentUser = "BarOS SERVICE\\TrustedInstaller";
 		fs::remove(sysServices + "\\SysPulse.active");
 		fs::remove(sysServices + "\\NetMonitor.active");
+		fs::remove(sysServices + "\\ARSUpdate.active");
 		userHome = sysServices + "\\TrustedInstaller";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
@@ -3563,6 +3856,7 @@ void interfaceScreen() {
 		currentUser = "BarOS SERVICE\\SysPulse";
 		fs::remove(sysServices + "\\TrustedInstaller.active");
 		fs::remove(sysServices + "\\NetMonitor.active");
+		fs::remove(sysServices + "\\ARSUpdate.active");
 		userHome = sysServices + "\\SysPulse";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
@@ -3571,6 +3865,7 @@ void interfaceScreen() {
 		currentUser = "BarOS SERVICE\\NetMonitor";
 		fs::remove(sysServices + "\\SysPulse.active");
 		fs::remove(sysServices + "\\TrustedInstaller.active");
+		fs::remove(sysServices + "\\ARSUpdate.active");
 		userHome = sysServices + "\\NetMonitor";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
@@ -3611,6 +3906,19 @@ void interfaceScreen() {
 			pause();
 			fs::remove(alertFile);
 			writeLog("ALERT_VIEVED: " + currentUser);
+			applyColor();
+		}
+		if (fileExists(configRoot + "\\update.available")) {
+			string tag = readFile(configRoot + "\\update.available");
+			setColor("4f");
+			cout << "======================================================================================================================" << endl;
+			cout << "                                                    ARSLANIUS UPDATE" << endl;
+			cout << "======================================================================================================================" << endl;
+			cout << "  A new version is available: " << tag << endl;
+			cout << "  Current build: " << currentBuild << endl;
+			cout << "  Type 'update-install' to install" << endl;
+			cout << "======================================================================================================================" << endl;
+			pause();
 			applyColor();
 		}
 		string mailFile = userHome + "\\mail.txt";
@@ -3709,6 +4017,12 @@ void cmdLoop() {
 						writeLog("BarOS SERVICE\\NETMONITOR: ONLINE");
 
 					}
+				}
+			}
+			if (fileExists(sysServices + "\\ARSUpdate.active")) {
+				int UpdateCheck = getrand(0, 120);
+				if (UpdateCheck == 16) {
+					RunArsUpdateOnce();
 				}
 			}
 		}
@@ -3888,7 +4202,7 @@ void core(const string& cmd) {
 
 	if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
 		bool allowed = false;
-		vector<string> tiCmds = { "help", "mv", "text_to_sha256", "bcdboot", "license", "hibernate", "cp", "rm", "touch", "edit",
+		vector<string> tiCmds = { "help", "mv", "wu", "update-check", "update-install", "text_to_sha256", "bcdboot", "license", "hibernate", "cp", "rm", "touch", "edit",
 								  "echo", "bcdedit", "mkdir", "ls", "cd", "cat", "ren",
 								  "reset", "reboot_to_recovery", "cls", "ver", "whoami",
 								  "events", "sfc", "adduser", "deluser", "regedit",
@@ -3932,7 +4246,7 @@ void core(const string& cmd) {
 
 	if (safeMode) {
 		bool allowed = false;
-		vector<string> safeCmds = { "help", "lock", "wait_mode", "alias", "license", "hibernate", "lockmenu", "mv", "cp",
+		vector<string> safeCmds = { "help", "lock", "wu", "update-check", "wait_mode", "alias", "license", "hibernate", "lockmenu", "mv", "cp",
 									"echo", "bcdboot", "bcdedit", "rm", "touch", "mkdir",
 									"ls", "cd", "cat", "ren", "backup", "backup-restore",
 									"sysinfo", "reset", "reboot_to_recovery", "report",
@@ -3950,7 +4264,9 @@ void core(const string& cmd) {
 
 	if (currentUser == "SYSTEM ADMINISTRATOR") {
 		bool allowed = false;
-		vector<string> adminCmds = { "help", "calc", "text_to_sha256", "as-interpreter", "alias", "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "as-unpack", "wait_mode", "lockmenu",
+		vector<string> adminCmds = { "help", "calc", "wu", "update-check", "update-install", "text_to_sha256", "as-interpreter", "alias", 
+									 "game.bsodrunner", "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", 
+									 "as-unpack", "wait_mode", "lockmenu",
 									 "echo", "autorun", "bcdedit", "bcdboot", "netstat",
 									 "ipconfig", "tracert", "nslookup", "arp", "route",
 									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
@@ -3980,7 +4296,9 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		!sudo_command) {
 		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "alias", "as-interpreter", "game.bsodrunner", "confeditor", "license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
+		vector<string> userCmds = { "help", "arsstore", "wu", "update-check", "update-install",
+									"alias", "as-interpreter", "game.bsodrunner", "confeditor", 
+									"license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
 									"autorun", "ping", "cp", "mv", "touch", "backup",
 									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
 									"reboot_to_recovery", "lock", "calc", "sysinfo",
@@ -3999,7 +4317,7 @@ void core(const string& cmd) {
 
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo, game.bsodrunner" << endl;
-		cout << "System: Help, Lock, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
+		cout << "System: Help, Lock, wu, update-install, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
 		cout << "Admin: adduser, deluser, alert, Guest, text_to_sha256, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
@@ -4155,6 +4473,62 @@ void core(const string& cmd) {
 		}
 		string output = calculateHash(text);
 		cout << "SHA256: " << output << endl;
+	}
+	else if (ex_c == "wu" || ex_c == "update-check") {
+		cout << "[ BarOS SERVICE\\ARSUpdate ] Checking for updates..." << endl;
+		string json = CheckForUpdates();
+		if (json.empty()) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Check failed: no response from GitHub." << endl;
+			return;
+		}
+		string tag = ParseTagName(json);
+		if (tag.empty()) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Check failed: no version in response." << endl;
+			return;
+		}
+		if (IsNewerAvailable(tag, currentBuild)) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] New version available: " << tag << endl;
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Current build: " << currentBuild << endl;
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Type 'update-install' to download." << endl;
+			writeFile(configRoot + "\\update.available", tag);
+		}
+		else {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Your system is up to date (" << currentBuild << ")." << endl;
+		}
+	}
+	else if (ex_c == "update-install") {
+		if (!fileExists(configRoot + "\\update.available")) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] No update available. Run 'wu' first." << endl;
+			return;
+		}
+		string tag = trim(readFile(configRoot + "\\update.available"));
+		cout << "[ ARSUPDATE ] Preparing to install " << tag << "..." << endl;
+
+		string json = CheckForUpdates();
+		if (json.empty()) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Failed to fetch release info." << endl;
+			return;
+		}
+
+		string url = ParseDownloadUrl(json, "ARSLANIUS.exe");
+		if (url.empty()) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] No ARSLANIUS.exe in release assets." << endl;
+			return;
+		}
+
+		string destPath = rootPath + "\\ARSLANIUS_" + tag + ".exe";
+		cout << "[ ARSUPDATE ] Downloading to " << destPath << "..." << endl;
+		if (!DownloadFile(url, destPath)) {
+			cout << "[ BarOS SERVICE\\ARSUpdate ] Download failed." << endl;
+			writeLog("BarOS SERVICE\\ARSUpdate: download failed: " + url);
+			return;
+		}
+
+		writeLog("BarOS SERVICE\\ARSUpdate: downloaded " + tag + " to " + destPath);
+		cout << "[ OK ] Downloaded: " << destPath << endl;
+		cout << "[ BarOS SERVICE\\ARSUpdate ] Size: " << fs::file_size(destPath) / 1024 << " KB" << endl;
+		cout << "[ BarOS SERVICE\\ARSUpdate ] To install, close ARSLANIUS, replace the old .exe with the new one, and restart." << endl;
+		fs::remove(configRoot + "\\update.available");
 	}
 	else if (ex_c == "alias") {
 		string filename = userHome + "\\USER_DATA\\aliases.cfg";
@@ -4867,9 +5241,10 @@ void core(const string& cmd) {
 		cout << "======================================================================================================================" << endl;
 		cout << endl;
 		cout << "[USER]" << endl;
-		cout << "  Current User  : " << currentUser << endl;
-		cout << "  Home          : " << userHome << endl;
-		cout << "  Path          : " << CurrentPath << endl;
+		cout << "  Current User        : " << currentUser << endl;
+		cout << "  Home                : " << userHome << endl;
+		cout << "  Path                : " << CurrentPath << endl;
+		cout << "  Your Protected ID   : " << threadSMSSid << endl;
 		cout << endl;
 		cout << "[SYSTEM]" << endl;
 		cout << "  OS Name       : " << getOSName() << endl;
@@ -4896,6 +5271,12 @@ void core(const string& cmd) {
 		}
 		else {
 			cout << "  BarOS SERVICE\\NetMonitor        : OFFLINE" << endl;
+		}
+		if (fileExists(sysServices + "\\ARSUpdate.active")) {
+			cout << "  BarOS SERVICE\\ARSUpdate         : ONLINE" << endl;
+		}
+		else {
+			cout << "  BarOS SERVICE\\ARSUpdate         : OFFLINE" << endl;
 		}
 		pause();
 	}
@@ -5101,6 +5482,7 @@ void shutdownScreen() {
 	fs::remove(sysServices + "\\SysPulse.active");
 	fs::remove(sysServices + "\\TrustedInstaller.active");
 	fs::remove(sysServices + "\\NetMonitor.active");
+	fs::remove(sysServices + "\\ARSUpdate.active");
 	BarOSkrnl("ACPI");
 }
 
@@ -5633,6 +6015,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 			}
 			cout << endl;
 			requestFromResume = 1;
+			u_in = currentUser;
 			arslogon("authorization");
 			if (!requestFromResume) break;
 		}
@@ -5670,7 +6053,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 3";
+	string Title = getOSName() + " RC";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
