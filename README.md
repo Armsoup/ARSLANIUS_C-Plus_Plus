@@ -38,6 +38,10 @@ Features
 
 • SMSS - Session Manager Subsystem, each user creates a new thread
 
+• LSASS - verifies the hash and manages the SAM
+
+• SERVICES and svchost - a thread for services
+
 • Auto-updates - simply enter 'wu', and if updates are available, enter 'update-install'.
 
 • Memory Diagnostic tool
@@ -71,6 +75,8 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 • ARSLANIUS 31 Beta 3 - build 288
 
 • ARSLANIUS 31 RC - build 307
+
+• ARSLANIUS 31 RC2 - build 340
       
 * * *
 
