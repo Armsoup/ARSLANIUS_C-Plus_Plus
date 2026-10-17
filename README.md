@@ -52,7 +52,7 @@ Features
 
 • Full event logging (system.log)
 
-• 20 BSOD (Blue Screen of Death) types with stop codes
+• 21 BSOD (Blue Screen of Death) types with stop codes
 
 • Integrity protection - SHA-256, Antihack, file size limits, config structure validation on every boot
 
@@ -77,6 +77,8 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 • ARSLANIUS 31 RC - build 307
 
 • ARSLANIUS 31 RC2 - build 340
+
+• ARSLANIUS 31 RC3 - build 376
       
 * * *
 
@@ -89,7 +91,7 @@ The ARSLANIUS Driver SDK allows anyone to extend the ARSLANIUS operating system 
 ### 1. Prerequisites
 
 - Microsoft Visual Studio 2022 or later (with C++ workload)
-- ARSLANIUS (Build 58.2.0 or later)
+- ARSLANIUS (build 58.2.0 (or 257) or later)
 
 ### 2. Get the SDK
 
@@ -566,6 +568,7 @@ ARSLANIUS supports full session hibernation:
 | 0x15 | DRIVER_CRITICAL_FAILURE | Driver returned BAROS_CRITICAL |
 | 0x16 | CRITICAL_KERNEL_ERROR | General kernel error |
 | 0x18 | RESUME_USER_NOT_FOUND | Hibernate user deleted |
+| 0x19 | SAM_DOES_NOT_MATCH_CACHE | SAM does not match the cache |
 | DIED | CRITICAL_PROCESS_DIED | ArsLogon died |
 | 666 | MANUAL_CRASH | User typed `bsod` |
 
