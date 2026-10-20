@@ -180,7 +180,8 @@ string CurrentPath;
 string userHome;
 string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
-string codename = CODENAME_DEFAULT;
+// string codename = CODENAME_DEFAULT;
+string codename = "";
 
 DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
 DWORD64 logoutTimeout = 60;
@@ -1568,10 +1569,12 @@ DWORD WINAPI SessionThread(LPVOID) {
 	catch (const exception& e) {
 		cout << "CRITICAL ERROR: Unfortunately, your session was interrupted due to an error; work cannot continue, and unsaved data will be lost." << endl;
 		cout << "The cause of the error is exception " << e.what() << endl;
+		pause();
 		writeLog("Unexpected session termination with exception " + string(e.what()), "CRITICAL");
 	}
 	catch (...) {
 		cout << "CRITICAL ERROR: Unfortunately, your session was interrupted due to an error; work cannot continue, and unsaved data will be lost." << endl;
+		pause();
 		writeLog("Unexpected session termination", "CRITICAL");
 	}
 	return 0;
@@ -1746,7 +1749,7 @@ void BSOD_Runner() {
 			clearScreen();
 			applyColor();
 			cout << "======================================================================================================================" << endl;
-			cout << "                                              BSOD RUNNER — TOP-5" << endl;
+			cout << "                                              BSOD RUNNER | TOP-5" << endl;
 			cout << "======================================================================================================================" << endl;
 
 			if (!fileExists(topPath)) {
@@ -1809,6 +1812,7 @@ void BSOD_Runner() {
 				Sleep(200);
 			}
 			if (files == 0) {
+				SaveBSODRunnerScore(score);
 				setColor("2f");
 				cout << "\n======================================================================================================================" << endl;
 				cout << "                                                TEMP IS CLEAN! YOU WIN!" << endl;
@@ -2084,6 +2088,7 @@ void installapp(string_view app_id) {
 		app_install << "color 2f" << endl;
 		app_install << ":start" << endl;
 		app_install << "set /p sum=Please enter the question:" << endl;
+		app_install << "if \"%sum%\"==\"q\" exit" << endl;
 		app_install << "set /a ans=%sum%" << endl;
 		app_install << "echo The Answer=%ans%" << endl;
 		app_install << "pause" << endl;
@@ -2096,6 +2101,9 @@ void installapp(string_view app_id) {
 		pause();
 		return;
 	}
+	cout << "Successful installed." << endl;
+	pause();
+	return;
 }
 
 void check_kernel() {
@@ -2110,9 +2118,7 @@ void check_kernel() {
 	for (const string& searchFor : linesToFind) {
 		string lowerSearch = searchFor;
 		transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(), ::tolower);
-		if (lowerContent.find(lowerSearch) != string::npos) {
-		}
-		else {
+		if (lowerContent.find(lowerSearch) == string::npos) {
 			bsod("8");
 		}
 	}
@@ -3421,6 +3427,7 @@ void logonScreen() {
 	while (true) {
 		currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
 		CurrentPath = sysProf;
+		SetCurrentDirectoryA(sysProf.c_str());
 		acpiRequest = 0;
 		vector<string> users;
 		users.push_back("Shutdown");
@@ -3565,6 +3572,8 @@ void logonScreen() {
 				promptCoord.X = 0;
 				promptCoord.Y = listStartY + (int)users.size() + 4;
 				SetConsoleCursorPosition(hConsole, promptCoord);
+				string kernel;
+				LSASS("readSAM", &kernel, "", "");
 
 				cout << "Password for " << u_in << ": ";
 				char ch;
@@ -3839,7 +3848,7 @@ void arslogon(string_view authority) {
 		}
 		cout << endl;
 
-		if (checkHash(a_p, EXPECTED_ADMIN_HASH)) {
+		if (LSASS("CheckPass", nullptr, "SYSTEM ADMINISTRATOR", a_p) == SUCCESS_CHECK_PASSWORD || LSASS("CheckPass", nullptr, adminUser, a_p) == SUCCESS_CHECK_PASSWORD) {
 			writeLog("SUDO_EXEC: " + t_c + " BY " + currentUser, "WARNING");
 			ex_c = t_c;
 			sudo_command = 1;
@@ -3867,7 +3876,6 @@ void arslogon(string_view authority) {
 		sudo_command = 0;
 		SuccessAuth = 0;
 		requestFromResume = 0;
-		recoveryRequest = 0;
 		loginAttempts = 0;
 		p_in.clear();
 		u_in.clear();
@@ -3875,6 +3883,7 @@ void arslogon(string_view authority) {
 		t_c.clear();
 		ex_c.clear();
 		currentUser.clear();
+		adminUser.clear();
 		CurrentPath.clear();
 		userHome.clear();
 		ConfigPath.clear();
@@ -3895,9 +3904,9 @@ void arslogon(string_view authority) {
 		COORD home = { 0, 0 };
 		DWORD cells = csbi.dwSize.X * csbi.dwSize.Y;
 		FillConsoleOutputCharacterA(hSasBuffer, ' ', cells, home, &written);
-		FillConsoleOutputAttribute(hSasBuffer, 0x1F, cells, home, &written);
+		FillConsoleOutputAttribute(hSasBuffer, 0x0F, cells, home, &written);
 		SetConsoleCursorPosition(hSasBuffer, home);
-		SetConsoleTextAttribute(hSasBuffer, 0x1F);
+		SetConsoleTextAttribute(hSasBuffer, 0x0F);
 		string menu = "Secure Settings\n"
 			"                                                 1. Logout\n"
 			"                                                 2. Passwd\n"
@@ -4276,7 +4285,8 @@ void core(const string& cmd) {
 			core(ex_c);
 			return;
 		}
-		cout << "Enter ADMIN password: ";
+		if (!adminUser.empty()) cout << "Enter ADMIN (or for " << adminUser << ") password: ";
+		else cout << "Enter ADMIN password: ";
 		arslogon("SudoAuth");
 		return;
 	}
@@ -4373,26 +4383,14 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (!enableLua || (currentUser == "SYSTEM ADMINISTRATOR" || currentUser == adminUser)) {
-		bool allowed = false;
-		vector<string> adminCmds = { "help", "old.calculator", "calc", "wu", "update-check", "update-install", "text_to_sha256", "as-interpreter",
-									 "passwd", "confeditor", "license", "ping", "as-pack", "hibernate", "alias",
-									 "as-unpack", "wait_mode", "lockmenu", "netstat",
-									 "echo", "autorun", "bcdedit", "bcdboot", "sc",
-									 "ipconfig", "tracert", "nslookup", "arp", "route",
-									 "taskmgr", "sysinfo", "cp", "mv", "rm", "reset",
-									 "bsod", "touch", "mkdir", "ls", "cd", "cat", "ren",
-									 "backup", "backup-restore", "lock", "events",
-									 "reboot_to_recovery", "report", "cls", "ver", "whoami",
-									 "shutdown", "reboot", "adduser", "start", "sfc",
-									 "clean", "mail-read", "mail-send", "edit", "guest-toggle",
-									 "regedit", "deluser", "msg-all", "broadcast", "alert", "restore-point",
-									 "restore" };
+	if (sudo_command || !enableLua || (currentUser == "SYSTEM ADMINISTRATOR" || currentUser == adminUser)) {
+		bool restricted = false;
+		vector<string> adminCmds = { "arsstore", "game.bsodrunner", "notepad" };
 		for (const string& c : adminCmds) {
-			if (ex_c == c) { allowed = true; break; }
+			if (ex_c == c) { restricted = true; break; }
 		}
-		if (!allowed) {
-			cout << "[ SECURITY ] Restricted context. (If you launched arsstore, game.bsodrunner or notepad, they do not run with administrator privileges.)" << endl;
+		if (restricted) {
+			cout << "[ SECURITY ] ArsStore, game.bsodrunner, and notepad do not launch with administrator privileges." << endl;
 			return;
 		}
 	}
@@ -4406,20 +4404,15 @@ void core(const string& cmd) {
 		currentUser != "BarOS SERVICE\\SysPulse" &&
 		currentUser != "BarOS SERVICE\\NetMonitor" &&
 		!sudo_command) {
-		bool allowed = false;
-		vector<string> userCmds = { "help", "arsstore", "wu", "update-check", "update-install",
-									"alias", "as-interpreter", "game.bsodrunner", "confeditor",
-									"license", "as-pack", "hibernate", "as-unpack", "mkdir", "wait_mode", "echo", "lockmenu",
-									"autorun", "ping", "cp", "mv", "touch", "backup",
-									"ls", "cd", "cat", "ren", "backup-restore", "passwd",
-									"reboot_to_recovery", "lock", "old.calculator", "calc", "sysinfo",
-									"restore", "restore-point", "mail-send", "mail-read",
-									"clean", "report", "cls", "ver", "whoami", "calc",
-									"notepad", "reboot", "shutdown" };
+		bool restricted = false;
+		vector<string> userCmds = { "sc", "msg-all", "broadcast", "alert", "text_to_sha256", "guest-toggle",
+						            "adduser", "deluser", "sfc", "events", "edit", "bcdboot", "bcdedit",
+			                        "regedit", "ipconfig", "arp", "route", "netstat", "nslookup", "tracert",
+			                        "bsod", "reset", "rm", "report", "reboot_to_recovery" };
 		for (const string& c : userCmds) {
-			if (ex_c == c) { allowed = true; sudo_command = 0; break; }
+			if (ex_c == c) { restricted = true; sudo_command = 0; break; }
 		}
-		if (!allowed) {
+		if (restricted) {
 			cout << "Error: Access Denied. Use \"sudo " << ex_c << "\"." << endl;
 			sudo_command = 0;
 			return;
@@ -5133,6 +5126,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "confeditor") {
 		string AUTORUN = to_string(autorun);
+		string LOGOUTTIMEOUT = to_string(logoutTimeout);
 		auto sanitize = [](string& s, string def) {
 			if (s.empty()) { s = def; return; }
 			for (char c : s) {
@@ -5143,6 +5137,7 @@ void core(const string& cmd) {
 			}
 			};
 
+		sanitize(LOGOUTTIMEOUT, "60");
 		sanitize(defaultuserHome, defaultuserHome);
 		sanitize(color_user, color_user);
 		sanitize(AUTORUN, "1");
@@ -5151,6 +5146,12 @@ void core(const string& cmd) {
 		cin.ignore(cin.rdbuf()->in_avail(), '\n');
 		if (cin.peek() == '\n') cin.ignore();
 		string input;
+		cout << "Enter a new logout timeout (or Enter to skip): ";
+		input = "";
+		if (getline(cin, input)) {
+			string t = trim(input);
+			if (!t.empty()) LOGOUTTIMEOUT = t;
+		}
 		cout << "Enter new Default Home (or Enter to skip): ";
 		input = "";
 		if (getline(cin, input)) {
@@ -5169,10 +5170,22 @@ void core(const string& cmd) {
 			string t = trim(input);
 			if (!t.empty()) AUTORUN = t;
 		}
+
+		if (LOGOUTTIMEOUT.empty()) LOGOUTTIMEOUT = "60";
 		if (defaultuserHome.empty()) defaultuserHome = userHome;
-		if (color_user.empty()) color_user = color_user;
+		if (color_user.empty()) color_user = "1f";
 		if (AUTORUN.empty()) AUTORUN = "1";
-		autorun = stoi(AUTORUN);
+		if (color_user.length() > 2) color_user = "1f";
+		if (AUTORUN.length() > 1) AUTORUN = "1";
+		if (LOGOUTTIMEOUT.length() > 4) LOGOUTTIMEOUT = "60";
+		try {
+			autorun = stoi(AUTORUN);
+			logoutTimeout = stoi(LOGOUTTIMEOUT);
+		}
+		catch (...) {
+			autorun = 1;
+			logoutTimeout = 60;
+		}
 
 		stringstream config;
 		config << "LOGOUT_TIMEOUT=" << logoutTimeout << endl;
@@ -5590,7 +5603,12 @@ void core(const string& cmd) {
 		if (adminColor.length() > 2) adminColor = "4f";
 		if (userColor.length() > 2) userColor = "1f";
 		if (ENABLELUA.length() > 1) ENABLELUA = "1";
-		enableLua = stoi(ENABLELUA);
+		try {
+			enableLua = stoi(ENABLELUA);
+		}
+		catch (...) {
+			enableLua = 1;
+		}
 
 		stringstream reg;
 		reg << "OS_NAME=" << osName << endl;
@@ -6126,7 +6144,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 			exit(0);
 		}
 		if (acpiRequest == 2) { g_AntiHackRunning = 0; Sleep(650); g_AntiHackRunning = 1; BarOSkrnl("initPath"); bootMenu(); }
-		setColor("0f");
+		setColor("07");
 		clearScreen();
 		cout << "ERROR: CRITICAL ACPI ERROR" << endl;
 		pause();
@@ -6239,6 +6257,11 @@ void BarOSkrnl(string_view Kernel_mode) {
 			fs::remove(configRoot + "\\hibernate.sys");
 			interfaceScreen();
 		}
+		if (currentUser == "BarOS\\KERNEL") {
+			fs::remove(configRoot + "\\hibernate.sys");
+			earlycons = 1;
+			interfaceScreen();
+		}
 		if (currentUser == "BarOS AUTHORITY\\SYSTEM") currentUser = "SYSTEM";
 		setColor("5b");
 		while (true) {
@@ -6300,7 +6323,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " RC3";
+	string Title = getOSName();
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);

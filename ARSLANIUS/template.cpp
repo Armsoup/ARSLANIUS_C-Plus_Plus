@@ -59,24 +59,26 @@ void cmd_sdk_demo(const string& args) {
         api->print("  SAM: EXISTS\n");
     }
     
-    if (api->create_directory("SDK_Test")) {
-        api->print("  [ OK ] Created folder: SDK_Test\n");
-    }
+	const char* home = api->get_driver_home("ARSLANIUS_SDK");
+	const char* file = "\\demo.txt";
+	string pathFile = string(home) + file;
+	
+    api->write_file(pathFile.c_str(), "Created by ARSLANIUS SDK Demo.\n");
+	string toprint = "  [ OK ] Wrote: " + pathFile + "\n";
+    api->print(toprint.c_str());
     
-    api->write_file("SDK_Test\\demo.txt", "Created by ARSLANIUS SDK Demo.\n");
-    api->print("  [ OK ] Wrote: SDK_Test\\demo.txt\n");
-    
-    api->append_file("SDK_Test\\demo.txt", "This line was appended.\n");
+    api->append_file(pathFile.c_str(), "This line was appended.\n");
     api->print("  [ OK ] Appended to demo.txt\n");
     
-    const char* content = api->read_file("SDK_Test\\demo.txt");
+    const char* content = api->read_file(pathFile.c_str());
     api->print("  demo.txt content:\n");
     api->print(content);
     
-    api->delete_file("SDK_Test\\demo.txt");
+    api->delete_file(pathFile.c_str());
     api->print("  [ OK ] Deleted demo.txt\n");
     
-    api->shell_execute("rmdir /s /q SDK_Test");
+	string pathDel = "rmdir /s /q \"" + string(home) + "\"";
+    api->shell_execute(pathDel.c_str());
     api->print("  [ OK ] Removed folder\n");
     api->print("\n");
     
@@ -169,7 +171,7 @@ void cmd_sdk_time(const string& args) {
 // =====================================================================
 void cmd_sdk_info(const string& args) {
     api->print("=== SDK Sample Driver ===\n");
-    api->print("Version: 1.0.0\n");
+    api->print("Version: 2.0.0\n");
     api->print("Author: ARSLANIUS Community\n");
     api->print("\nCommands provided:\n");
     api->print("  sdk.demo  - Full API demonstration\n");
