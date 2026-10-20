@@ -79,6 +79,8 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 • ARSLANIUS 31 RC2 - build 340
 
 • ARSLANIUS 31 RC3 - build 376
+
+• ARSLANIUS 31 Release - build 383
       
 * * *
 
