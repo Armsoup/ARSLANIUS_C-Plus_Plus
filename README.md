@@ -38,7 +38,7 @@ Features
 
 • SMSS - Session Manager Subsystem, each user creates a new thread
 
-• LSASS - verifies the hash and manages the SAM
+• LSASS - verifies password hashes, manages the SAM database (including integrity checks), and assigns privilege tokens and generates SIDs
 
 • SERVICES and svchost - a thread for services
 
@@ -65,23 +65,15 @@ Features
 * * *
 Build numbering logic
 
-Build 288
+Build 383
 
 Initially, the number 243 was taken as the approximate total count of compilations, 
 but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 
-• ARSLANIUS 31 Beta 2 - build 257
-
-• ARSLANIUS 31 Beta 3 - build 288
-
-• ARSLANIUS 31 RC - build 307
-
-• ARSLANIUS 31 RC2 - build 340
-
-• ARSLANIUS 31 RC3 - build 376
-
 • ARSLANIUS 31 Release - build 383
-      
+
+• ARSLANIUS 32 Beta 1 - build 413
+
 * * *
 
 # ARSLANIUS Driver SDK
