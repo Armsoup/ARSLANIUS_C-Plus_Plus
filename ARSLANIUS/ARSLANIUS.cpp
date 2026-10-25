@@ -1,6 +1,7 @@
 ﻿// Copyright © Armsoup 2026
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
+#pragma warning(disable: 6258)
 #include <windows.h>
 #include <iostream>
 #include <string>
@@ -58,17 +59,19 @@ typedef struct _PEB64 {
 #define FLG_HEAP_ENABLE_FREE_CHECK 0x20
 #define FLG_HEAP_VALIDATE_PARAMETERS 0x40
 
-#define UNKNOWN_ACTION 2000
-#define ERROR_INIT 2001
-#define SUCCESS_INIT 2002
-#define SUCCESS_CHECK_PASSWORD 2501
-#define ERROR_CHECK_PASSWORD 2502
-#define USER_NOT_FOUND 2503
-#define SUCCESS_SAM 2601
-#define ERROR_SAM 2602
+#define UNKNOWN_ACTION 0x2000
+#define ERROR_INIT 0x2001
+#define SUCCESS_INIT 0x2002
+#define SUCCESS_CHECK_PASSWORD 0x2501
+#define ERROR_CHECK_PASSWORD 0x2502
+#define USER_NOT_FOUND 0x2503
+#define SUCCESS_SAM 0x2601
+#define ERROR_SAM 0x2602
+#define SUCCESS_CREATE_TOKEN 0x2701
+#define ERROR_ACCESS_DENIED_TOKEN 0x2702
 
 std::vector<void*> g_TrapPages;
-bool g_AntiHackRunning = true;
+std::atomic<bool> g_AntiHackRunning = true;
 std::atomic<bool> isServicesRunning = false;
 std::atomic<bool> g_samViolation = false;
 std::atomic<bool> g_antiHackAlive = false;
@@ -146,9 +149,9 @@ MemoryGuard __memory_guard;
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const string REG_VERSION = "31";
-const string OS_NAME_DEFAULT = "ARSLANIUS 31";
-const string CODENAME_DEFAULT = "Emerald";
+const string REG_VERSION = "32";
+const string OS_NAME_DEFAULT = "ARSLANIUS 32";
+const string CODENAME_DEFAULT = "Aurora";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
 const string EXPECTED_ADMIN_HASH = "8f84f2200431dc8458256e74fbd76a8030e4ac684855c599ba31714b7a8adc05";
 const string EXPECTED_VERIFY_HASH = "c0e7ff17fdedb150b97f10aaa614fa5cf788b4b9a37152297344d05f676969df";
@@ -170,6 +173,7 @@ string usersRoot;
 string programsRoot;
 string sysProf;
 string sysServices;
+string HomeDefault;
 string regPath;
 string logPath;
 string bcdPath;
@@ -180,8 +184,8 @@ string CurrentPath;
 string userHome;
 string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
-// string codename = CODENAME_DEFAULT;
-string codename = "";
+string codename = CODENAME_DEFAULT;
+// string codename = "";
 
 DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
 DWORD64 logoutTimeout = 60;
@@ -235,10 +239,28 @@ HANDLE hOriginalBuffer = NULL;
 HANDLE hSasBuffer = NULL;
 bool arslogonInitializated = 0;
 
+enum PrivilegeType {
+	PRIV_NONE = 0,
+	PRIV_NETWORKSERVICE = 1,
+	PRIV_LOCALSERVICE = 2,
+	PRIV_GUEST = 3,
+	PRIV_USER = 4,
+	PRIV_ADMIN = 5,
+	PRIV_SYSTEM = 6
+};
+
+struct token {
+	string sid;
+	PrivilegeType privilege = PRIV_NONE;
+};
+
+static token Token;
+
 // =====================================================================
 // FORWARD DECLARATIONS
 // =====================================================================
 void BarOSkrnl(string_view Kernel_mode);
+string GenerateSID(string_view user);
 DWORD LSASS(string_view action, string* out = nullptr, const string& user = "", string_view additional = "");
 void SERVICES(const string& ServiceToStart);
 void SMSS();
@@ -309,6 +331,31 @@ namespace fs = filesystem;
 // IMPLEMENTATION: UTILITY FUNCTIONS
 // =====================================================================
 
+bool IsSystem() {
+	return Token.privilege == PRIV_SYSTEM;
+}
+
+bool IsAdmin() {
+	return Token.privilege == PRIV_ADMIN;
+}
+
+bool IsUser() {
+	return Token.privilege == PRIV_USER;
+}
+
+bool IsGuest() {
+	return Token.privilege == PRIV_GUEST;
+}
+
+bool IsService() {
+	if (Token.sid == "S-7-0-18" && Token.privilege == PRIV_SYSTEM) return 1;
+	return Token.privilege == PRIV_LOCALSERVICE || Token.privilege == PRIV_NETWORKSERVICE;
+}
+
+string GetSID() {
+	return Token.sid;
+}
+
 string trim(const string& s) {
 	size_t start = s.find_first_not_of(" \t\r\n");
 	if (start == string::npos) return "";
@@ -322,6 +369,7 @@ int getrand(int min, int max) {
 	uniform_int_distribution<> dist(min, max);
 	return dist(gen);
 }
+
 
 string getUptime() {
 	if (kernelStartTime == 0) return "[ ERROR ] For some unknown reason, the kernel was not initialized.";
@@ -1312,7 +1360,7 @@ DWORD LSASS(string_view action, string* out, const string& user, string_view add
 		if (cache != sam) return ERROR_SAM;
 		return SUCCESS_SAM;
 	}
-	else if (action == "CheckPass") {
+	else if (action == "CheckPass" || action == "CheckPassNoLog") {
 		if (!sam_loaded) return ERROR_CHECK_PASSWORD;
 		istringstream iss(sam_cache);
 		string line;
@@ -1329,18 +1377,47 @@ DWORD LSASS(string_view action, string* out, const string& user, string_view add
 			}
 		}
 		if (!found) {
-			writeLog("LSASS: ERROR: User " + user + " not found!", "WARNING");
+			if (action != "CheckPassNoLog") writeLog("LSASS: ERROR: User " + user + " not found!", "WARNING");
 			return USER_NOT_FOUND;
 		}
 		string Hash = calculateHash(additional);
 		if (storedHash == Hash) {
-			writeLog("LSASS: Successful " + user + " user login ", "INFO");
+			if (action != "CheckPassNoLog") writeLog("LSASS: Successful " + user + " user login ", "INFO");
 			return SUCCESS_CHECK_PASSWORD;
 		}
 		else {
-			writeLog("LSASS: An incorrect password was entered for user " + user, "INFO");
+			if (action != "CheckPassNoLog") writeLog("LSASS: An incorrect password was entered for user " + user, "INFO");
 			return ERROR_CHECK_PASSWORD;
 		}
+	}
+	else if (action == "CreateToken") {
+		Token.sid = GenerateSID(user);
+		if (Token.sid != "S-7-0-18" && Token.sid != "S-7-0-19" && Token.sid != "S-7-0-20" && user != "BarOS AUTHORITY\\LogonAuthorityUser" && user != "BarOS\\KERNEL") {
+			if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) return ERROR_ACCESS_DENIED_TOKEN;
+		}
+
+		if (user == "SYSTEM" ||
+			user == "BarOS AUTHORITY\\SYSTEM" || user == "BarOS SERVICE\\TrustedInstaller" ||
+			user == "BarOS AUTHORITY\\LogonAuthorityUser" || user == "BarOS\\KERNEL") {
+			Token.privilege = PRIV_SYSTEM;
+		}
+		else if (user == "GUEST") {
+			Token.privilege = PRIV_GUEST;
+		}
+		else if (user == "SYSTEM ADMINISTRATOR" || (user == adminUser && user != "GUEST") || !enableLua) {
+			Token.privilege = PRIV_ADMIN;
+		}
+		else if (user == "BarOS SERVICE\\SysPulse") {
+			Token.privilege = PRIV_LOCALSERVICE;
+		}
+		else if (user == "BarOS SERVICE\\NetMonitor") {
+			Token.privilege = PRIV_NETWORKSERVICE;
+		}
+		else {
+			if (enableLua) Token.privilege = PRIV_USER;
+			else Token.privilege = PRIV_ADMIN;
+		}
+		return SUCCESS_CREATE_TOKEN;
 	}
 	else if (action == "readSAM") {
 		if (!sam_loaded) return ERROR_SAM;
@@ -1397,9 +1474,8 @@ DWORD WINAPI svchost(LPVOID param) {
 	try {
 		writeLog("SERVICES: " + name + " service started", "INFO");
 		while (isServicesRunning) {
-			if (safeMode || rec || diagnostic != 0) break;
+			if ((safeMode || rec || diagnostic != 0) || name == Terminationservice) break;
 			if (!fileExists(sysServices + "\\" + name + ".active")) writeFile(sysServices + "\\" + name + ".active", "RUNNING");
-			if (name == Terminationservice) break;
 
 			if (name == "SysPulse") {
 				if (getrand(0, 120) == 26) writeLog("BarOS SERVICE\\SYSPULSE: System Health OK", "INFO");
@@ -1460,6 +1536,16 @@ DWORD WINAPI svchost(LPVOID param) {
 						reg_ins << "REG_VERSION=" << REG_VERSION << endl;
 						writeFile(regPath, reg_ins.str());
 					}
+					if (!dirExists(HomeDefault)) {
+						string Path = HomeDefault + "\\USER_DATA\\BAROS_USER_DATA.sys";
+						fs::create_directories(HomeDefault + "\\USER_DATA");
+						stringstream ss;
+						ss << "LOGOUT_TIMEOUT=60" << endl;
+						ss << "USER_DEFAULT_HOME=" << endl;
+						ss << "COLOR=" << color_user << endl;
+						ss << "ENABLE_AUTORUN=1" << endl;
+						writeFile(Path, ss.str());
+					}
 					writeLog("BarOS SERVICE\\TrustedInstaller: AUTO_REPAIR_SUCCESS", "INFO");
 				}
 				Sleep(5000);
@@ -1514,7 +1600,7 @@ DWORD WINAPI svchost(LPVOID param) {
 }
 
 void SERVICES(const string& ServiceToStart) {
-	Terminationservice = "";
+	Terminationservice.clear();
 	auto spawn = [](const string& name) {
 		string* arg = new string(name);
 		HANDLE h = CreateThread(NULL, 0, svchost, arg, 0, NULL);
@@ -1569,13 +1655,13 @@ DWORD WINAPI SessionThread(LPVOID) {
 	catch (const exception& e) {
 		cout << "CRITICAL ERROR: Unfortunately, your session was interrupted due to an error; work cannot continue, and unsaved data will be lost." << endl;
 		cout << "The cause of the error is exception " << e.what() << endl;
-		pause();
 		writeLog("Unexpected session termination with exception " + string(e.what()), "CRITICAL");
+		pause();
 	}
 	catch (...) {
 		cout << "CRITICAL ERROR: Unfortunately, your session was interrupted due to an error; work cannot continue, and unsaved data will be lost." << endl;
-		pause();
 		writeLog("Unexpected session termination", "CRITICAL");
+		pause();
 	}
 	return 0;
 }
@@ -1678,6 +1764,51 @@ void SaveBSODRunnerScore(int score) {
 		ss << e.user << "=" << e.score << endl;
 	}
 	writeFile(topPath, ss.str());
+}
+
+string GenerateSID(string_view user) {
+	string hash = calculateHash(CODENAME_DEFAULT);
+	unsigned int a = stoul(hash.substr(0, 8), nullptr, 16);
+	unsigned int b = stoul(hash.substr(8, 8), nullptr, 16);
+	unsigned int c = stoul(hash.substr(16, 8), nullptr, 16);
+	string domain = to_string(a) + "-" + to_string(b) + "-" + to_string(c);
+	if (user == "SYSTEM" || user == "BarOS AUTHORITY\\SYSTEM") return "S-7-0-9";
+	if (user == "KERNEL" || user == "BarOS\\KERNEL") return "S-7-0-1";
+	if (user == "BarOS SERVICE\\TrustedInstaller") return "S-7-0-18";
+	if (user == "BarOS SERVICE\\SysPulse") return "S-7-0-19";
+	if (user == "BarOS SERVICE\\NetMonitor") return "S-7-0-20";
+	if (user == "SYSTEM ADMINISTRATOR") return "S-7-0-50-" + domain + "-500";
+	if (user == "GUEST") {
+		return "S-7-0-50-" + domain + "-501";
+	}
+	string sam;
+	LSASS("readSAM", &sam, "", "");
+	istringstream iss(sam);
+	string line;
+	int userIndex = 0;
+	bool found = 0;
+
+	while (getline(iss, line)) {
+		line = trim(line);
+		if (line.empty()) continue;
+
+		size_t eqPos = line.find('=');
+		if (eqPos == string::npos) continue;
+
+		string username = trim(line.substr(0, eqPos));
+
+		if (username == "SYSTEM" || username == "SYSTEM ADMINISTRATOR") continue;
+
+		if (username == user) {
+			found = 1;
+			break;
+		}
+		userIndex++;
+	}
+	if (!found) return "";
+	int rid = 1000 + userIndex;
+	string sid = "S-7-0-50-" + domain + "-" + to_string(rid);
+	return sid;
 }
 
 void BSOD_Runner() {
@@ -2101,7 +2232,7 @@ void installapp(string_view app_id) {
 		pause();
 		return;
 	}
-	cout << "Successful installed." << endl;
+	cout << "Successfully installed." << endl;
 	pause();
 	return;
 }
@@ -2213,7 +2344,7 @@ void check_AUTHORITY() {
 	string lowerKernel = kernel;
 	transform(lowerKernel.begin(), lowerKernel.end(), lowerKernel.begin(), ::tolower);
 
-	if (lowerKernel.find("baros authority") != string::npos) {
+	if (lowerKernel.find("baros") != string::npos || lowerKernel.find("kernel") != string::npos || lowerKernel.find("default") != string::npos) {
 		bsod("5");
 	}
 }
@@ -2270,7 +2401,10 @@ void loadRegistry() {
 					setup = setup;
 				}
 			}
-			else if (key == "ADMIN_USER") adminUser = value;
+			else if (key == "ADMIN_USER") {
+				adminUser = value;
+				if (adminUser == "GUEST") adminUser = "";
+			}
 		}
 		catch (...) {
 			continue;
@@ -2367,6 +2501,7 @@ void ensureDirectories() {
 	fs::create_directories(configRoot);
 	fs::create_directories(sysServices);
 	fs::create_directories(usersRoot);
+	fs::create_directories(HomeDefault);
 	fs::create_directories(programsRoot);
 }
 
@@ -2484,7 +2619,7 @@ void bsod(string_view code) {
 		print_slow("*** File: \\Settings And System Files\\SAM", 2);
 		cout << endl;
 		print_slow("RESERVED_USERNAME_DETECTED - Security violation!", 2);
-		print_slow("Someone tried to create 'BarOS AUTHORITY' in SAM.", 2);
+		print_slow("Someone tried to create 'BarOS AUTHORITY\\SYSTEM' or 'BarOS\\KERNEL' in SAM.", 2);
 		print_slow("That's like printing your own \"100% REAL OFFICIAL\" dollar bill.", 2);
 		cout << endl;
 		print_slow("Technical information:", 2);
@@ -2876,7 +3011,7 @@ void bootMenu() {
 			string nu, np;
 			getline(cin, nu);
 			nu = trim(nu);
-			if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR") {
+			if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR" || nu.find("LogonAuthorityUser") != string::npos || nu == "Default") {
 				cout << "[ ERROR ] Reserved username." << endl;
 				return;
 			}
@@ -2886,7 +3021,7 @@ void bootMenu() {
 				cout << "[ ERROR ] User already exists." << endl;
 				return;
 			}
-			cout << "Password: ";
+			cout << "Password (can be left blank): ";
 			char ch;
 			while ((ch = _getch()) != '\r') {
 				if (ch == '\b') {
@@ -2904,7 +3039,18 @@ void bootMenu() {
 
 			string hash = calculateHash(np);
 			LSASS("appendSAM", nullptr, "", nu + " = " + hash + "\n");
+			if (!dirExists(HomeDefault)) {
+				string Path = HomeDefault + "\\USER_DATA\\BAROS_USER_DATA.sys";
+				fs::create_directories(HomeDefault + "\\USER_DATA");
+				stringstream ss;
+				ss << "LOGOUT_TIMEOUT=60" << endl;
+				ss << "USER_DEFAULT_HOME=" << endl;
+				ss << "COLOR=" << color_user << endl;
+				ss << "ENABLE_AUTORUN=1" << endl;
+				writeFile(Path, ss.str());
+			}
 			fs::create_directories(usersRoot + "\\" + nu);
+			fs::copy(HomeDefault, usersRoot + "\\" + nu, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 			cout << "[ OK ] User created." << endl;
 			pause();
 			stringstream reg;
@@ -3172,6 +3318,7 @@ void diagnosticMode(int mode) {
 	check_all();
 	if (mode == 1) currentUser = "BarOS SERVICE\\SysPulse";
 	else if (mode == 2) currentUser = "BarOS SERVICE\\NetMonitor";
+	LSASS("CreateToken", nullptr, currentUser, "");
 
 	successfulboot++;
 	SMSS();
@@ -3268,6 +3415,7 @@ void recoveryEnv() {
 		case '4':
 			rec = 1;
 			LSASS("Init", nullptr, "", "");
+			LSASS("CreateToken", nullptr, "BarOS SERVICE\\TrustedInstaller", "");
 			SMSS();
 			return;
 		case '5': memoryDiag(); break;
@@ -3303,6 +3451,16 @@ void startupRepair() {
 	reg << "SETUP=1" << endl;
 	reg << "REG_VERSION=" << REG_VERSION << endl;
 	writeFile(regPath, reg.str());
+
+	// Create Default Profile
+	string Path = HomeDefault + "\\USER_DATA\\BAROS_USER_DATA.sys";
+	fs::create_directories(HomeDefault + "\\USER_DATA");
+	stringstream ss;
+	ss << "LOGOUT_TIMEOUT=60" << endl;
+	ss << "USER_DEFAULT_HOME=" << endl;
+	ss << "COLOR=" << color_user << endl;
+	ss << "ENABLE_AUTORUN=1" << endl;
+	writeFile(Path, ss.str());
 
 	writeLog("KERNEL_RESTORED_BY_RECOVERY", "INFO");
 
@@ -3426,8 +3584,19 @@ void memoryDiag() {
 void logonScreen() {
 	while (true) {
 		currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
-		CurrentPath = sysProf;
-		SetCurrentDirectoryA(sysProf.c_str());
+		if (!dirExists(HomeDefault)) {
+			string Path = HomeDefault + "\\USER_DATA\\BAROS_USER_DATA.sys";
+			fs::create_directories(HomeDefault + "\\USER_DATA");
+			stringstream ss;
+			ss << "LOGOUT_TIMEOUT=60" << endl;
+			ss << "USER_DEFAULT_HOME=" << endl;
+			ss << "COLOR=" << color_user << endl;
+			ss << "ENABLE_AUTORUN=1" << endl;
+			writeFile(Path, ss.str());
+		}
+		LSASS("CreateToken", nullptr, currentUser, "");
+		CurrentPath = HomeDefault;
+		SetCurrentDirectoryA(HomeDefault.c_str());
 		acpiRequest = 0;
 		vector<string> users;
 		users.push_back("Shutdown");
@@ -3572,8 +3741,11 @@ void logonScreen() {
 				promptCoord.X = 0;
 				promptCoord.Y = listStartY + (int)users.size() + 4;
 				SetConsoleCursorPosition(hConsole, promptCoord);
-				string kernel;
-				LSASS("readSAM", &kernel, "", "");
+				if (LSASS("CheckPassNoLog", nullptr, u_in, "") == SUCCESS_CHECK_PASSWORD) {
+					p_in = "";
+					arslogon("authorization");
+					return;
+				}
 
 				cout << "Password for " << u_in << ": ";
 				char ch;
@@ -3678,6 +3850,7 @@ void arslogon(string_view authority) {
 
 		if (resCheck == SUCCESS_CHECK_PASSWORD) {
 			// Success
+			LSASS("CreateToken", nullptr, u_in, p_in);
 			if (!requestFromResume) {
 				fs::remove(failFile);
 
@@ -3848,10 +4021,15 @@ void arslogon(string_view authority) {
 		}
 		cout << endl;
 
-		if (LSASS("CheckPass", nullptr, "SYSTEM ADMINISTRATOR", a_p) == SUCCESS_CHECK_PASSWORD || LSASS("CheckPass", nullptr, adminUser, a_p) == SUCCESS_CHECK_PASSWORD) {
+		if (LSASS("CheckPassNoLog", nullptr, "SYSTEM ADMINISTRATOR", a_p) == SUCCESS_CHECK_PASSWORD || LSASS("CheckPassNoLog", nullptr, adminUser, a_p) == SUCCESS_CHECK_PASSWORD) {
 			writeLog("SUDO_EXEC: " + t_c + " BY " + currentUser, "WARNING");
 			ex_c = t_c;
 			sudo_command = 1;
+			if (!IsGuest() && !IsService()) {
+				if (LSASS("CreateToken", nullptr, "SYSTEM ADMINISTRATOR", a_p) == ERROR_ACCESS_DENIED_TOKEN) {
+					LSASS("CreateToken", nullptr, adminUser, a_p);
+				}
+			}
 			core(ex_c);
 		}
 		else {
@@ -3946,6 +4124,7 @@ void arslogon(string_view authority) {
 		cout << "\n\n                                                  " << getOSName() << "\n\n";
 		pause();
 		while (true) {
+			if (LSASS("CheckPassNoLog", nullptr, currentUser, "") == SUCCESS_CHECK_PASSWORD || GetSID() == "S-7-0-1") break;
 			cout << "Enter password for " << currentUser << ": ";
 			// Hide password input
 			char ch;
@@ -3997,6 +4176,8 @@ void arslogon(string_view authority) {
 		ss << "COLOR=" << color_user << endl;
 		ss << "ENABLE_AUTORUN=" << autorun << endl;
 		writeFile(ConfigPath, ss.str());
+		Token.sid.clear();
+		Token.privilege = PRIV_SYSTEM;
 		Sleep(2000);
 		return;
 	}
@@ -4139,9 +4320,12 @@ void interfaceScreen() {
 void cmdLoop() {
 	while (true) {
 		// Prompt
-		sudo_command = 0;
+		if (sudo_command) {
+			LSASS("CreateToken", nullptr, currentUser, p_in);
+			sudo_command = 0;
+		}
 		cout << currentUser << "@ARSLANIUS> ";
-		string cmd = "";
+		string cmd;
 
 		while (true) {
 			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
@@ -4151,10 +4335,7 @@ void cmdLoop() {
 				while (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
 					Sleep(50);
 				}
-				if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
-					currentUser != "BarOS SERVICE\\SysPulse" &&
-					currentUser != "BarOS SERVICE\\NetMonitor" &&
-					currentUser != "BarOS\\KERNEL") {
+				if (!IsService() && GetSID() != "S-7-0-1") {
 					arslogon("SecureAS_lockmenu");
 					break;
 				}
@@ -4167,10 +4348,7 @@ void cmdLoop() {
 				while (GetAsyncKeyState('K') & 0x8000) {
 					Sleep(50);
 				}
-				if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
-					currentUser != "BarOS SERVICE\\SysPulse" &&
-					currentUser != "BarOS SERVICE\\NetMonitor" &&
-					currentUser != "BarOS\\KERNEL") {
+				if (!IsService() && GetSID() != "S-7-0-1") {
 					BarOSkrnl("reload");
 					break;
 				}
@@ -4219,19 +4397,12 @@ void core(const string& cmd) {
 		arslogon("emergency_reboot");
 	}
 	if (cmd == "arslogon") {
-		if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
-			currentUser != "BarOS SERVICE\\SysPulse" &&
-			currentUser != "BarOS SERVICE\\NetMonitor"
-			) {
+		if (!IsService()) {
 			arslogon("");
 		}
 	}
 	if (cmd == "lockmenu") {
-		if (currentUser != "BarOS SERVICE\\TrustedInstaller" &&
-			currentUser != "BarOS SERVICE\\SysPulse" &&
-			currentUser != "BarOS SERVICE\\NetMonitor" &&
-			currentUser != "BarOS\\KERNEL"
-			) {
+		if (!IsService() && GetSID() != "S-7-0-1") {
 			arslogon("SecureAS_lockmenu");
 		}
 	}
@@ -4274,13 +4445,7 @@ void core(const string& cmd) {
 			cout << "Usage: sudo [command]" << endl;
 			return;
 		}
-		if (currentUser == "BarOS AUTHORITY\\SYSTEM" ||
-			currentUser == "SYSTEM ADMINISTRATOR" ||
-			currentUser == "BarOS\\KERNEL" ||
-			currentUser == "BarOS SERVICE\\TrustedInstaller" ||
-			currentUser == "BarOS SERVICE\\SysPulse" ||
-			currentUser == "BarOS SERVICE\\NetMonitor" ||
-			currentUser == adminUser) {
+		if (IsService() || IsSystem() || IsAdmin()) {
 			ex_c = t_c;
 			core(ex_c);
 			return;
@@ -4294,10 +4459,10 @@ void core(const string& cmd) {
 	// Command routing
 	transform(ex_c.begin(), ex_c.end(), ex_c.begin(), ::tolower);
 
-	if (currentUser == "GUEST") {
+	if (IsGuest()) {
 		bool allowed = false;
-		vector<string> guestCmds = { "help", "game.bsodrunner", "alias", "lock", "license", "confeditor", "hibernate", "wait_mode", "echo", "ls", "cd",
-									 "lockmenu", "report", "cls", "ver", "whoami", "old.calculator",
+		vector<string> guestCmds = { "help", "game.bsodrunner", "alias", "lock", "license", "confeditor", "hibernate", "wait_mode", "echo", 
+									 "lockmenu", "cls", "ver", "whoami", "old.calculator", "cat", "rm", "mkdir", "touch", "cd", "ls",
 									 "calc", "notepad", "reboot", "shutdown" };
 		for (const string& c : guestCmds) {
 			if (ex_c == c) { allowed = true; break; }
@@ -4308,7 +4473,7 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (currentUser == "BarOS\\KERNEL") {
+	if (GetSID() == "S-7-0-1" && IsSystem()) {
 		bool restricted = false;
 		vector<string> kernelCmds = { "lock", "lockmenu" };
 		for (const string& c : kernelCmds) {
@@ -4320,7 +4485,7 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (currentUser == "BarOS SERVICE\\TrustedInstaller") {
+	if (GetSID() == "S-7-0-18" && IsService() && IsSystem()) {
 		bool allowed = false;
 		vector<string> tiCmds = { "help", "mv", "wu", "update-check", "update-install", "old.calculator",
 								  "text_to_sha256", "bcdboot", "license", "hibernate", "calc", "cp", "rm", "touch", "edit",
@@ -4337,7 +4502,7 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (currentUser == "BarOS SERVICE\\SysPulse") {
+	if (GetSID() == "S-7-0-19" && IsService()) {
 		bool allowed = false;
 		vector<string> spCmds = { "help", "ls", "sysinfo", "license", "hibernate", "events", "report", "echo",
 								  "taskmgr", "cd", "cat", "reboot", "shutdown",
@@ -4351,7 +4516,7 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (currentUser == "BarOS SERVICE\\NetMonitor") {
+	if (GetSID() == "S-7-0-20" && IsService()) {
 		bool allowed = false;
 		vector<string> nmCmds = { "help", "reboot", "ping", "license", "hibernate", "netstat", "ipconfig",
 								  "echo", "tracert", "nslookup", "arp", "route",
@@ -4383,7 +4548,7 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (sudo_command || !enableLua || (currentUser == "SYSTEM ADMINISTRATOR" || currentUser == adminUser)) {
+	if (IsAdmin()) {
 		bool restricted = false;
 		vector<string> adminCmds = { "arsstore", "game.bsodrunner", "notepad" };
 		for (const string& c : adminCmds) {
@@ -4395,20 +4560,12 @@ void core(const string& cmd) {
 		}
 	}
 
-	if (enableLua &&
-		currentUser != "BarOS AUTHORITY\\SYSTEM" &&
-		currentUser != "SYSTEM ADMINISTRATOR" &&
-		currentUser != "BarOS\\KERNEL" &&
-		currentUser != adminUser &&
-		currentUser != "BarOS SERVICE\\TrustedInstaller" &&
-		currentUser != "BarOS SERVICE\\SysPulse" &&
-		currentUser != "BarOS SERVICE\\NetMonitor" &&
-		!sudo_command) {
+	if (IsUser()) {
 		bool restricted = false;
 		vector<string> userCmds = { "sc", "msg-all", "broadcast", "alert", "text_to_sha256", "guest-toggle",
-						            "adduser", "deluser", "sfc", "events", "edit", "bcdboot", "bcdedit",
-			                        "regedit", "ipconfig", "arp", "route", "netstat", "nslookup", "tracert",
-			                        "bsod", "reset", "rm", "report", "reboot_to_recovery" };
+									"adduser", "deluser", "sfc", "events", "edit", "bcdboot", "bcdedit",
+									"regedit", "ipconfig", "arp", "route", "netstat", "nslookup", "tracert",
+									"bsod", "reset", "rm", "report", "reboot_to_recovery" };
 		for (const string& c : userCmds) {
 			if (ex_c == c) { restricted = true; sudo_command = 0; break; }
 		}
@@ -4428,6 +4585,14 @@ void core(const string& cmd) {
 	else if (ex_c == "ver") cout << getOSName() << " [Build " << currentBuild << "]" << endl;
 	else if (ex_c == "whoami") {
 		cout << "Current User: " << currentUser << endl;
+		cout << "SID: " << GetSID() << endl;
+		cout << "Privilege: ";
+		if (IsGuest()) cout << "Guest" << endl;
+		else if (IsUser()) cout << "User" << endl;
+		else if (IsAdmin()) cout << "Admin" << endl;
+		else if (IsService()) cout << "Service" << endl;
+		else if (IsSystem()) cout << "SYSTEM" << endl;
+		else cout << "Unknown Error" << endl;
 		cout << "Path: " << CurrentPath << endl;
 	}
 	else if (ex_c == "sc") {
@@ -4890,23 +5055,14 @@ void core(const string& cmd) {
 				cout << "[ ERROR ] GUEST already exists." << endl;
 				return;
 			}
-			string hash = calculateHash("GUEST");
+			string hash = "fac5c96b534af41edd82ce2bb9b89865daff06a5f06b5ddf8760e55c61e56476";
 			LSASS("appendSAM", nullptr, "", "GUEST = " + hash + "\n");
 			fs::create_directories(usersRoot + "\\GUEST");
 			writeLog("GUEST_ENABLED", "INFO");
-			cout << "[ OK ] Guest mode ACTIVE. Login: GUEST / Pass: GUEST" << endl;
+			cout << "[ OK ] Guest mode ACTIVE. Login: GUEST / No password" << endl;
 		}
 		else {
-			string kernel;
-			LSASS("readSAM", &kernel, "", "");
-			istringstream iss(kernel);
-			string line, newKernel;
-			while (getline(iss, line)) {
-				if (line.find("GUEST =") != 0 && line.find("GUEST=") != 0) {
-					newKernel += line + "\n";
-				}
-			}
-			LSASS("writeSAM", nullptr, "", newKernel);
+			LSASS("delSAM", nullptr, "GUEST", "");
 			string guestDir = usersRoot + "\\GUEST";
 			if (fs::exists(guestDir)) {
 				fs::remove_all(guestDir);
@@ -4959,6 +5115,10 @@ void core(const string& cmd) {
 		}
 	}
 	else if (ex_c == "cat") {
+		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
+			cout << "Guests are not permitted to view the contents of files in this folder" << endl;
+			return;
+		}
 		string targetFile;
 		cout << "Enter filename: ";
 		getline(cin, targetFile);
@@ -4986,6 +5146,10 @@ void core(const string& cmd) {
 		cout << "[ OK ] Autorun set: " << autorunCmd << endl;
 	}
 	else if (ex_c == "mkdir") {
+		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
+			cout << "Guests are not permitted to create files in this folder" << endl;
+			return;
+		}
 		string folderName;
 		cout << "Enter folder name: ";
 		getline(cin, folderName);
@@ -5036,6 +5200,10 @@ void core(const string& cmd) {
 		system(cmd.c_str());
 	}
 	else if (ex_c == "touch") {
+		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
+			cout << "Guests are not permitted to create folders within this folder" << endl;
+			return;
+		}
 		string touchFile;
 		cout << "Enter filename: ";
 		getline(cin, touchFile);
@@ -5090,6 +5258,10 @@ void core(const string& cmd) {
 		}
 	}
 	else if (ex_c == "rm") {
+		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
+			cout << "Guests are not permitted to delete files in this folder" << endl;
+			return;
+		}
 		string targetFile;
 		cout << "File to delete: ";
 		getline(cin, targetFile);
@@ -5147,25 +5319,25 @@ void core(const string& cmd) {
 		if (cin.peek() == '\n') cin.ignore();
 		string input;
 		cout << "Enter a new logout timeout (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) LOGOUTTIMEOUT = t;
 		}
 		cout << "Enter new Default Home (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) defaultuserHome = t;
 		}
 		cout << "Enter new color (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) color_user = t;
 		}
 		cout << "Enter new autorun enable/disable (0 - disabled, 1 - enabled) (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) AUTORUN = t;
@@ -5250,7 +5422,7 @@ void core(const string& cmd) {
 		cout << "Username: ";
 		getline(cin, nu);
 		nu = trim(nu);
-		if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR" || nu.find("LogonAuthorityUser") != string::npos) {
+		if (nu == "SYSTEM" || nu == "BarOS AUTHORITY\\SYSTEM" || nu == "SYSTEM ADMINISTRATOR" || nu.find("LogonAuthorityUser") != string::npos || nu == "Default") {
 			PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
 			cout << "[ ERROR ] Reserved username." << endl;
 			return;
@@ -5262,7 +5434,7 @@ void core(const string& cmd) {
 			cout << "[ ERROR ] User already exists." << endl;
 			return;
 		}
-		cout << "Password: ";
+		cout << "Password (can be left blank): ";
 		char ch;
 		while ((ch = _getch()) != '\r') {
 			if (ch == '\b') {
@@ -5281,6 +5453,7 @@ void core(const string& cmd) {
 		string hash = calculateHash(np);
 		LSASS("appendSAM", nullptr, "", nu + " = " + hash + "\n");
 		fs::create_directories(usersRoot + "\\" + nu);
+		fs::copy(HomeDefault, usersRoot + "\\" + nu, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 		writeLog("NEW_USER_CREATED: " + nu, "INFO");
 		cout << "[ OK ] User created." << endl;
 	}
@@ -5295,22 +5468,12 @@ void core(const string& cmd) {
 			return;
 		}
 
-		string kernel;
-		LSASS("readSAM", &kernel, "", "");
-		istringstream iss(kernel);
-		string line, newKernel;
-		while (getline(iss, line)) {
-			if (line.find(du + " =") != 0 && line.find(du + "=") != 0) {
-				newKernel += line + "\n";
-			}
-		}
-		LSASS("writeSAM", nullptr, "", newKernel);
+		LSASS("delSAM", nullptr, du, "");
 		RemoveDirectoryA((usersRoot + "\\" + du).c_str());
 		cout << "[ OK ] User removed." << endl;
 	}
 	else if (ex_c == "passwd") {
-		if (currentUser == "BarOS AUTHORITY\\SYSTEM" ||
-			currentUser.find("BarOS SERVICE") == 0) {
+		if (IsSystem() || IsService() || IsGuest()) {
 			cout << "Cannot change this account's password." << endl;
 			return;
 		}
@@ -5460,6 +5623,7 @@ void core(const string& cmd) {
 		cout << "  Home                : " << userHome << endl;
 		cout << "  Path                : " << CurrentPath << endl;
 		cout << "  Your Protected ID   : " << threadSMSSid << endl;
+		cout << "  Your SID            : " << GetSID() << endl;
 		cout << endl;
 		cout << "[SYSTEM]" << endl;
 		cout << "  OS Name       : " << getOSName() << endl;
@@ -5550,45 +5714,46 @@ void core(const string& cmd) {
 		sanitize(systemColor, "0e");
 		sanitize(adminColor, "4f");
 		sanitize(userColor, "1f");
-		sanitize(ENABLELUA, "1");
 		sanitize(adminUser, "");
+		sanitize(ENABLELUA, "1");
 		cout << "[ SECURITY ] Press enter." << endl;
 		if (cin.peek() == EOF || cin.peek() == '\n') cin.ignore();
 		cin.ignore(cin.rdbuf()->in_avail(), '\n');
 		if (cin.peek() == '\n') cin.ignore();
 		string input;
 		cout << "Enter new OS Name (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) osName = t;
 		}
 		cout << "Enter new system color (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) systemColor = t;
 		}
 		cout << "Enter new admin color (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) adminColor = t;
 		}
 		cout << "Enter new user color (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) userColor = t;
 		}
 		cout << "Enter new admin user (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) adminUser = t;
+			if (adminUser == "GUEST") adminUser = "";
 		}
 		cout << "Enter new value EnableLUA (or Enter to skip): ";
-		input = "";
+		input.clear();
 		if (getline(cin, input)) {
 			string t = trim(input);
 			if (!t.empty()) ENABLELUA = t;
@@ -5668,7 +5833,7 @@ void core(const string& cmd) {
 		cout << "result: " << formatDouble(result) << endl;
 	}
 	else if (ex_c == "old.calculator") {
-		if (currentUser == "GUEST") {
+		if (IsGuest()) {
 			cout << "Unsafe command, use 'calc'" << endl;
 			return;
 		}
@@ -5876,6 +6041,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 		programsRoot = rootPath + "\\Programs";
 		sysProf = configRoot + "\\systemprofile";
 		sysServices = sysProf;
+		HomeDefault = usersRoot + "\\Default";
 		regPath = configRoot + "\\REG.cfg";
 		logPath = configRoot + "\\system.log";
 		bcdPath = configRoot + "\\BCD";
@@ -6255,17 +6421,25 @@ void BarOSkrnl(string_view Kernel_mode) {
 			currentUser == "BarOS SERVICE\\SysPulse" ||
 			currentUser == "BarOS SERVICE\\NetMonitor") {
 			fs::remove(configRoot + "\\hibernate.sys");
+			LSASS("CreateToken", nullptr, currentUser, "");
 			interfaceScreen();
 		}
 		if (currentUser == "BarOS\\KERNEL") {
 			fs::remove(configRoot + "\\hibernate.sys");
 			earlycons = 1;
+			LSASS("CreateToken", nullptr, currentUser, "");
 			interfaceScreen();
 		}
 		if (currentUser == "BarOS AUTHORITY\\SYSTEM") currentUser = "SYSTEM";
 		setColor("5b");
 		while (true) {
 			clearScreen();
+			u_in = currentUser;
+			if (LSASS("CheckPassNoLog", nullptr, u_in, "") == SUCCESS_CHECK_PASSWORD) {
+				p_in = "";
+				arslogon("authorization");
+				break;
+			}
 			cout << "Enter password for " << currentUser << ": ";
 			// Hide password input
 			char ch;
@@ -6284,7 +6458,6 @@ void BarOSkrnl(string_view Kernel_mode) {
 			}
 			cout << endl;
 			requestFromResume = 1;
-			u_in = currentUser;
 			arslogon("authorization");
 			if (!requestFromResume) break;
 		}
@@ -6293,6 +6466,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 	if (Kernel_mode == "EARLY_LAUNCH_CONSOLE") {
 		earlycons = 1;
 		LSASS("Init", nullptr, "", "");
+		LSASS("CreateToken", nullptr, "BarOS\\KERNEL", "");
 		SMSS();
 		return;
 	}
@@ -6323,7 +6497,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName();
+	string Title = getOSName() + " Beta 1";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
