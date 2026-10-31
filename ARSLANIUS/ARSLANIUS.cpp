@@ -153,8 +153,8 @@ const string REG_VERSION = "32";
 const string OS_NAME_DEFAULT = "ARSLANIUS 32";
 const string CODENAME_DEFAULT = "Aurora";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
-const string EXPECTED_ADMIN_HASH = "8f84f2200431dc8458256e74fbd76a8030e4ac684855c599ba31714b7a8adc05";
-const string EXPECTED_VERIFY_HASH = "c0e7ff17fdedb150b97f10aaa614fa5cf788b4b9a37152297344d05f676969df";
+const string_view EXPECTED_ADMIN_HASH = "8f84f2200431dc8458256e74fbd76a8030e4ac684855c599ba31714b7a8adc05";
+const string_view EXPECTED_VERIFY_HASH = "6d8c55fc3479dcf90a725f2828d39a126648209b37d472b1950d388421954915";
 const int BOOT_TIMEOUT_DEFAULT = 30;
 const int DEFAULT_MODE_DEFAULT = 1;
 const int MAX_LOGIN_ATTEMPTS = 10;
@@ -178,7 +178,6 @@ string regPath;
 string logPath;
 string bcdPath;
 string restoreRoot;
-
 string currentUser;
 string CurrentPath;
 string userHome;
@@ -186,51 +185,49 @@ string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
 string codename = CODENAME_DEFAULT;
 // string codename = "";
-
-DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
-DWORD64 logoutTimeout = 60;
-DWORD64 kernelStartTime = 0;
-DWORD64 savedUptime = 0;
-int defaultMode = DEFAULT_MODE_DEFAULT;
-int bootChoice = 0;
-bool requestFromResume = 0;
-bool safeMode = 0;
-bool rec = 0;
-bool earlycons = 0;
-int diagnostic = 0;
-int lastSuccessfulMode = 0;
-int acpiRequest = 0;
-bool enableLua = 1;
-bool fastBoot = 1;
-DWORD threadSMSSid;
-DWORD oldSMSSid;
 string REG_VERSION_FOUND = "0";
-bool setup = 0;
-bool sudo_command = 0;
-bool lockdown = 0;
-int loginAttempts = 0;
-bool DriverloadOFF = 0;
-bool autorun = 1;
-bool SuccessAuth = 0;
-DWORD64 fileSize = 0;
-int bootcount = 0;
-int successfulboot = 0;
 string systemColor = "0e";
 string adminColor = "4f";
 string userColor = "1f";
 string t_c;
 string ConfigPath;
 string ex_c;
-bool recoveryRequest = 0;
-string p_in;
 string failFile;
 string adminUser;
-string u_in;
 string color_user;
 string defaultuserHome;
 string Terminationservice;
-
 string regKey = "SYSTEM_COLOR";
+
+DWORD64 bootTimeout = BOOT_TIMEOUT_DEFAULT;
+DWORD64 logoutTimeout = 60;
+DWORD64 kernelStartTime = 0;
+DWORD64 savedUptime = 0;
+DWORD64 fileSize = 0;
+DWORD threadSMSSid;
+DWORD oldSMSSid;
+bool enableLua = 1;
+bool fastBoot = 1;
+bool setup = 0;
+bool sudo_command = 0;
+bool lockdown = 0;
+bool requestFromResume = 0;
+bool safeMode = 0;
+bool rec = 0;
+bool earlycons = 0;
+bool DriverloadOFF = 0;
+bool autorun = 1;
+bool SuccessAuth = 0;
+bool recoveryRequest = 0;
+int defaultMode = DEFAULT_MODE_DEFAULT;
+int bootChoice = 0;
+int diagnostic = 0;
+int lastSuccessfulMode = 0;
+int acpiRequest = 0;
+int loginAttempts = 0;
+int bootcount = 0;
+int successfulboot = 0;
+int cmdcalls = 0;
 
 static string sam_cache;
 static bool sam_loaded = false;
@@ -263,6 +260,7 @@ void BarOSkrnl(string_view Kernel_mode);
 string GenerateSID(string_view user);
 DWORD LSASS(string_view action, string* out = nullptr, const string& user = "", string_view additional = "");
 void SERVICES(const string& ServiceToStart);
+void arsinit(string_view action);
 void SMSS();
 void pause();
 string getOSName();
@@ -302,7 +300,7 @@ void core(const string& cmd);
 bool checkHash(string_view input, string_view expectedHash);
 string calculateHash(string_view input);
 void bsod(string_view code);
-void arslogon(string_view authority);
+void arslogon(string_view authority, const string& username, string_view password);
 void shutdownScreen();
 void interfaceScreen();
 int getrand(int min, int max);
@@ -321,7 +319,6 @@ void SetConsoleWidthOnly(int newWidth);
 string formatDouble(double value);
 void garbage_collector();
 double evaluateWithVars(const string& expr, size_t& pos);
-void wait(int timeout);
 bool evaluateStringCondition(const string& expr);
 void executeLine(const string& line);
 void runScript(const string& path);
@@ -619,10 +616,6 @@ double evaluateWithVars(const string& expr, size_t& pos) {
 	return values.empty() ? 0.0 : values.top();
 }
 
-void wait(int timeout) {
-	Sleep(timeout * 1000);
-}
-
 bool evaluateStringCondition(const string& expr) {
 	string clean_expr = trim(expr);
 
@@ -838,7 +831,7 @@ void executeLine(const string& line) {
 			cout << "ERROR: Setting a wait time of more than 5 minutes is prohibited." << endl;
 		}
 		else {
-			wait(timeout);
+			Sleep(timeout * 1000);
 		}
 	}
 	else if (command == "appendfile") {
@@ -1004,8 +997,7 @@ void runScript(const string& path) {
 		}
 		result = trim(result);
 
-		string hash = calculateHash(result);
-		if (hash == EXPECTED_VERIFY_HASH) {
+		if (checkHash(result, EXPECTED_VERIFY_HASH)) {
 			is_verified = true;
 		}
 	}
@@ -1377,23 +1369,24 @@ DWORD LSASS(string_view action, string* out, const string& user, string_view add
 			}
 		}
 		if (!found) {
-			if (action != "CheckPassNoLog") writeLog("LSASS: ERROR: User " + user + " not found!", "WARNING");
+			if (action != "CheckPassNoLog") writeLog("LSASS: ERROR: User " + user + " not found!", "AUDIT");
 			return USER_NOT_FOUND;
 		}
-		string Hash = calculateHash(additional);
-		if (storedHash == Hash) {
-			if (action != "CheckPassNoLog") writeLog("LSASS: Successful " + user + " user login ", "INFO");
+		if (checkHash(additional, storedHash)) {
+			if (action != "CheckPassNoLog") writeLog("LSASS: Successful " + user + " user login ", "AUDIT");
 			return SUCCESS_CHECK_PASSWORD;
 		}
 		else {
-			if (action != "CheckPassNoLog") writeLog("LSASS: An incorrect password was entered for user " + user, "INFO");
+			if (action != "CheckPassNoLog") writeLog("LSASS: An incorrect password was entered for user " + user, "AUDIT");
 			return ERROR_CHECK_PASSWORD;
 		}
 	}
-	else if (action == "CreateToken") {
+	else if (action == "CreateToken" || action == "CreateTokenNoPass") {
 		Token.sid = GenerateSID(user);
 		if (Token.sid != "S-7-0-18" && Token.sid != "S-7-0-19" && Token.sid != "S-7-0-20" && user != "BarOS AUTHORITY\\LogonAuthorityUser" && user != "BarOS\\KERNEL") {
-			if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) return ERROR_ACCESS_DENIED_TOKEN;
+			if (action != "CreateTokenNoPass") {
+				if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) return ERROR_ACCESS_DENIED_TOKEN;
+			}
 		}
 
 		if (user == "SYSTEM" ||
@@ -1671,7 +1664,7 @@ void DisableServices() {
 	for (int i = 0; i < 100 && aliveServices > 0; i++) {
 		Sleep(100);
 	}
-	if (acpiRequest != 1) arslogon("SystemShutdown");
+	if (acpiRequest != 1) arslogon("SystemShutdown", "", "");
 }
 
 void SMSS() {
@@ -1680,9 +1673,7 @@ void SMSS() {
 	clearScreen();
 	setColor("60");
 	Sleep(100);
-	if (!safeMode && !rec && diagnostic == 0 && !earlycons) SERVICES("");
-	else isServicesRunning = 0;
-	arslogon("init");
+	arsinit("main");
 	while (true) {
 		threadSMSSid = NULL;
 		hSessionThread = CreateThread(NULL, 0, SessionThread, NULL, 0, &threadSMSSid);
@@ -1715,6 +1706,40 @@ void SMSS() {
 		}
 		oldSMSSid = threadSMSSid;
 	}
+}
+
+void arsinit(string_view action) {
+	if (action == "main") {
+		writeLog("ARSINIT: Initializing system components", "INFO");
+		if (!safeMode && !rec && diagnostic == 0 && !earlycons) {
+			writeLog("ARSINIT: Starting SERVICES", "INFO");
+			SERVICES("");
+		}
+		else isServicesRunning = 0;
+		writeLog("ARSINIT: Starting LSASS", "INFO");
+		DWORD res = LSASS("Init", nullptr, "", "");
+		if (safeMode || (!rec && !earlycons)) {
+			check_all();
+			if (res == ERROR_INIT) {
+				writeLog("ARSINIT: LSASS failed to start", "CRITICAL");
+				bsod("DIED");
+			}
+		}
+		writeLog("ARSINIT: Starting ArsLogon", "INFO");
+		arslogon("init", "", "");
+		writeLog("ARSINIT: System initialization complete", "INFO");
+	}
+	else if (action == "shutdown") {
+		writeLog("ARSINIT: System shutdown requested.", "INFO");
+		acpiRequest = 1;
+		throw SessionEnd{ 1 };
+	}
+	else if (action == "reboot") {
+		writeLog("ARSINIT: A system reboot has been requested.", "INFO");
+		acpiRequest = 2;
+		throw SessionEnd{ 2 };
+	}
+	else bsod("DIED");
 }
 
 void SaveBSODRunnerScore(int score) {
@@ -3085,8 +3110,6 @@ void bootMenu() {
 			switch (choice) {
 			case 'y': {
 				requestFromResume = 1;
-				DWORD res = LSASS("Init", nullptr, "", "");
-				if (res == ERROR_INIT) bsod("DIED");
 				SMSS();
 				break;
 			}
@@ -3215,9 +3238,6 @@ void normalBoot() {
 			bsod("14");  // BCD not found
 			return;
 		}
-		DWORD res = LSASS("Init", nullptr, "", "");
-		if (res == ERROR_INIT) bsod("DIED");
-		check_all();
 	}
 	// Boot animation
 	setColor("0f");
@@ -3289,9 +3309,6 @@ void safeModeBoot() {
 		return;
 	}
 
-	DWORD res = LSASS("Init", nullptr, "", "");
-	if (res == ERROR_INIT) bsod("DIED");
-	check_all();
 	cout << "Loaded: \\Settings And System Files\\BCD" << endl;
 	if (fileExists(kernelPath)) cout << "Loaded: \\Settings And System Files\\SAM" << endl;
 	Sleep(1000);
@@ -3313,12 +3330,9 @@ void diagnosticMode(int mode) {
 	rec = 0;
 	earlycons = 0;
 
-	DWORD res = LSASS("Init", nullptr, "", "");
-	if (res == ERROR_INIT) bsod("DIED");
-	check_all();
 	if (mode == 1) currentUser = "BarOS SERVICE\\SysPulse";
 	else if (mode == 2) currentUser = "BarOS SERVICE\\NetMonitor";
-	LSASS("CreateToken", nullptr, currentUser, "");
+	LSASS("CreateTokenNoPass", nullptr, currentUser, "");
 
 	successfulboot++;
 	SMSS();
@@ -3414,8 +3428,7 @@ void recoveryEnv() {
 		case '3': imageRecovery(); break;
 		case '4':
 			rec = 1;
-			LSASS("Init", nullptr, "", "");
-			LSASS("CreateToken", nullptr, "BarOS SERVICE\\TrustedInstaller", "");
+			LSASS("CreateTokenNoPass", nullptr, "BarOS SERVICE\\TrustedInstaller", "");
 			SMSS();
 			return;
 		case '5': memoryDiag(); break;
@@ -3582,6 +3595,8 @@ void memoryDiag() {
 // =====================================================================
 
 void logonScreen() {
+	string u_in;
+	string p_in;
 	while (true) {
 		currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
 		if (!dirExists(HomeDefault)) {
@@ -3594,7 +3609,7 @@ void logonScreen() {
 			ss << "ENABLE_AUTORUN=1" << endl;
 			writeFile(Path, ss.str());
 		}
-		LSASS("CreateToken", nullptr, currentUser, "");
+		LSASS("CreateTokenNoPass", nullptr, currentUser, "");
 		CurrentPath = HomeDefault;
 		SetCurrentDirectoryA(HomeDefault.c_str());
 		acpiRequest = 0;
@@ -3710,19 +3725,17 @@ void logonScreen() {
 
 				if (u_in == "Shutdown") {
 					writeLog("SHUTDOWN_FROM_LOGON", "INFO");
-					acpiRequest = 1;
-					throw SessionEnd{ 1 };
+					arsinit("shutdown");
 					return;
 				}
 				if (u_in == "Reboot") {
 					writeLog("REBOOT_FROM_LOGON", "INFO");
-					acpiRequest = 2;
-					throw SessionEnd{ 2 };
+					arsinit("reboot");
 					return;
 				}
 				if (u_in == "Rebootemer") {
 					writeLog("EMERGENCY_REBOOT_FROM_LOGON", "WARNING");
-					arslogon("emergency_reboot");
+					arslogon("emergency_reboot", "", "");
 					return;
 				}
 
@@ -3743,7 +3756,7 @@ void logonScreen() {
 				SetConsoleCursorPosition(hConsole, promptCoord);
 				if (LSASS("CheckPassNoLog", nullptr, u_in, "") == SUCCESS_CHECK_PASSWORD) {
 					p_in = "";
-					arslogon("authorization");
+					arslogon("authorization", u_in, p_in);
 					return;
 				}
 
@@ -3764,21 +3777,20 @@ void logonScreen() {
 				}
 				cout << endl;
 
-				arslogon("authorization");
+				arslogon("authorization", u_in, p_in);
 				if (SuccessAuth) return;
 				exitLogon = 1;
 			}
 			else if (key == 27) {
 				writeLog("SHUTDOWN_FROM_LOGON", "INFO");
-				acpiRequest = 1;
-				throw SessionEnd{ 1 };
+				arsinit("shutdown");
 				return;
 			}
 		}
 	}
 }
 
-void arslogon(string_view authority) {
+void arslogon(string_view authority, const string& username, string_view password) {
 	if (authority == "init") {
 		if (arslogonInitializated) return;
 		arslogonInitializated = 1;
@@ -3799,6 +3811,7 @@ void arslogon(string_view authority) {
 		return;
 	}
 	else if (authority == "authorization") {
+		string p_in(password);
 		loginAttempts = 0;
 		if (fileExists(failFile)) {
 			ifstream f(failFile);
@@ -3822,20 +3835,18 @@ void arslogon(string_view authority) {
 			if (command == "reboot") {
 				requestFromResume = 0;
 				writeLog("REBOOT_FROM_LOGON", "INFO");
-				acpiRequest = 2;
-				throw SessionEnd{ 2 };
+				arsinit("reboot");
 				return;
 			}
 			else if (command == "shutdown") {
 				requestFromResume = 0;
 				writeLog("SHUTDOWN_FROM_LOGON", "INFO");
-				acpiRequest = 1;
-				throw SessionEnd{ 1 };
+				arsinit("shutdown");
 				return;
 			}
 			else {}
 		}
-		DWORD resCheck = LSASS("CheckPass", nullptr, u_in, p_in);
+		DWORD resCheck = LSASS("CheckPass", nullptr, username, p_in);
 		if (resCheck == USER_NOT_FOUND) {
 			if (!requestFromResume) {
 				PlaySoundA("SystemHand", NULL, SND_ALIAS | SND_ASYNC);
@@ -3850,11 +3861,16 @@ void arslogon(string_view authority) {
 
 		if (resCheck == SUCCESS_CHECK_PASSWORD) {
 			// Success
-			LSASS("CreateToken", nullptr, u_in, p_in);
+			if (LSASS("CreateToken", nullptr, username, p_in) == ERROR_ACCESS_DENIED_TOKEN) {
+				cout << "Critical error while creating a token! Login is not possible." << endl;
+				writeLog("arslogon: The token was not created; further login is not possible.", "AUDIT");
+				pause();
+				return;
+			}
 			if (!requestFromResume) {
 				fs::remove(failFile);
 
-				currentUser = u_in;
+				currentUser = username;
 			}
 			if (currentUser == "SYSTEM") {
 				if (!requestFromResume) {
@@ -4055,8 +4071,6 @@ void arslogon(string_view authority) {
 		SuccessAuth = 0;
 		requestFromResume = 0;
 		loginAttempts = 0;
-		p_in.clear();
-		u_in.clear();
 		failFile.clear();
 		t_c.clear();
 		ex_c.clear();
@@ -4123,12 +4137,12 @@ void arslogon(string_view authority) {
 		setColor("0f");
 		cout << "\n\n                                                  " << getOSName() << "\n\n";
 		pause();
+		string p_in;
 		while (true) {
 			if (LSASS("CheckPassNoLog", nullptr, currentUser, "") == SUCCESS_CHECK_PASSWORD || GetSID() == "S-7-0-1") break;
-			cout << "Enter password for " << currentUser << ": ";
+			cout << "Enter p_in for " << currentUser << ": ";
 			// Hide password input
 			char ch;
-			p_in = "";
 			while ((ch = _getch()) != '\r') {
 				if (ch == '\b') {
 					if (!p_in.empty()) {
@@ -4321,9 +4335,10 @@ void cmdLoop() {
 	while (true) {
 		// Prompt
 		if (sudo_command) {
-			LSASS("CreateToken", nullptr, currentUser, p_in);
+			LSASS("CreateTokenNoPass", nullptr, currentUser, "");
 			sudo_command = 0;
 		}
+		cmdcalls = 0;
 		cout << currentUser << "@ARSLANIUS> ";
 		string cmd;
 
@@ -4336,7 +4351,7 @@ void cmdLoop() {
 					Sleep(50);
 				}
 				if (!IsService() && GetSID() != "S-7-0-1") {
-					arslogon("SecureAS_lockmenu");
+					arslogon("SecureAS_lockmenu", "", "");
 					break;
 				}
 			}
@@ -4393,19 +4408,23 @@ void core(const string& cmd) {
 	vector<string> parts = split(cmd, ' ');
 	if (parts.empty()) return;
 
+	if (cmd == "arsinit") {
+		arsinit("");
+	}
 	if (cmd == "arslogon -emergency reboot" || cmd == "rebootemer") {
-		arslogon("emergency_reboot");
+		arslogon("emergency_reboot", "", "");
 	}
 	if (cmd == "arslogon") {
 		if (!IsService()) {
-			arslogon("");
+			arslogon("", "", "");
 		}
 	}
 	if (cmd == "lockmenu") {
 		if (!IsService() && GetSID() != "S-7-0-1") {
-			arslogon("SecureAS_lockmenu");
+			arslogon("SecureAS_lockmenu", "", "");
 		}
 	}
+	cmdcalls++;
 	string firstWord = parts[0];
 	string rest;
 	if (parts.size() > 1) {
@@ -4418,6 +4437,12 @@ void core(const string& cmd) {
 	ex_c = cmd;
 	string f_w = firstWord;
 	t_c = rest;
+	if (cmdcalls >= 6) {
+		clearScreen();
+		cout << "Stopping recursion..." << endl;
+		cmdLoop();
+		return;
+	}
 
 	if (!safeMode) {
 		string aliasFile = userHome + "\\USER_DATA\\aliases.cfg";
@@ -4452,7 +4477,7 @@ void core(const string& cmd) {
 		}
 		if (!adminUser.empty()) cout << "Enter ADMIN (or for " << adminUser << ") password: ";
 		else cout << "Enter ADMIN password: ";
-		arslogon("SudoAuth");
+		arslogon("SudoAuth", "", "");
 		return;
 	}
 
@@ -4461,7 +4486,7 @@ void core(const string& cmd) {
 
 	if (IsGuest()) {
 		bool allowed = false;
-		vector<string> guestCmds = { "help", "game.bsodrunner", "alias", "lock", "license", "confeditor", "hibernate", "wait_mode", "echo", 
+		vector<string> guestCmds = { "help", "game.bsodrunner", "alias", "lock", "license", "confeditor", "hibernate", "wait_mode", "echo",
 									 "lockmenu", "cls", "ver", "whoami", "old.calculator", "cat", "rm", "mkdir", "touch", "cd", "ls",
 									 "calc", "notepad", "reboot", "shutdown" };
 		for (const string& c : guestCmds) {
@@ -4970,6 +4995,19 @@ void core(const string& cmd) {
 			return;
 		}
 		string zipPath = zipName + ".zip";
+		cout << "Select the compression level:" << endl;
+		cout << "1. Default" << endl;
+		cout << "2. Best" << endl;
+		cout << "3. Max (Uber)" << endl;
+		cout << "Number: ";
+		string choice;
+		int level;
+		getline(cin, choice);
+		cout << choice << endl;
+		if (choice == "1") level = MZ_DEFAULT_COMPRESSION;
+		else if (choice == "2") level = MZ_BEST_COMPRESSION;
+		else if (choice == "3") level = MZ_UBER_COMPRESSION;
+		else level = MZ_DEFAULT_COMPRESSION;
 		cout << "[ WAIT ] Packing files to " << zipPath << "..." << endl;
 		if (fs::exists(zipPath)) fs::remove(zipPath);
 		mz_zip_archive zip = {};
@@ -4980,7 +5018,7 @@ void core(const string& cmd) {
 				if (name != zipPath && name != "ARSLANIUS.exe") {
 					cout << "[ PACK ] Adding: " << name << endl;
 					string content = readFile(entry.path().string());
-					mz_zip_writer_add_mem(&zip, name.c_str(), content.c_str(), content.size(), MZ_DEFAULT_COMPRESSION);
+					mz_zip_writer_add_mem(&zip, name.c_str(), content.c_str(), content.size(), level);
 				}
 			}
 		}
@@ -5123,6 +5161,10 @@ void core(const string& cmd) {
 		cout << "Enter filename: ";
 		getline(cin, targetFile);
 		targetFile = trim(targetFile);
+		if (IsGuest() && (targetFile.find("..") != string::npos || targetFile.find(":") != string::npos)) {
+			cout << "'..' and ':' are forbidden for guests" << endl;
+			return;
+		}
 		if (fileExists(targetFile)) {
 			cout << readFile(targetFile) << endl;
 		}
@@ -5154,6 +5196,10 @@ void core(const string& cmd) {
 		cout << "Enter folder name: ";
 		getline(cin, folderName);
 		folderName = trim(folderName);
+		if (IsGuest() && (folderName.find("..") != string::npos || folderName.find(":") != string::npos)) {
+			cout << "'..' and ':' are forbidden for guests" << endl;
+			return;
+		}
 		if (fs::create_directory(folderName)) {
 			cout << "[ OK ] Folder created." << endl;
 		}
@@ -5208,6 +5254,10 @@ void core(const string& cmd) {
 		cout << "Enter filename: ";
 		getline(cin, touchFile);
 		touchFile = trim(touchFile);
+		if (IsGuest() && (touchFile.find("..") != string::npos || touchFile.find(":") != string::npos)) {
+			cout << "'..' and ':' are forbidden for guests" << endl;
+			return;
+		}
 		if (fileExists(touchFile)) {
 			cout << "[ ERROR ] File exists. Overwrite? (Y/N): ";
 			char c = _getch();
@@ -5266,6 +5316,10 @@ void core(const string& cmd) {
 		cout << "File to delete: ";
 		getline(cin, targetFile);
 		targetFile = trim(targetFile);
+		if (IsGuest() && (targetFile.find("..") != string::npos || targetFile.find(":") != string::npos)) {
+			cout << "'..' and ':' are forbidden for guests" << endl;
+			return;
+		}
 		if (fs::remove(targetFile)) {
 			cout << "[ OK ] Deleted." << endl;
 		}
@@ -5389,34 +5443,31 @@ void core(const string& cmd) {
 				bsod("");
 			}
 			Sleep(3000);
-			acpiRequest = 1;
 			fastBoot = 0;
-			shutdownScreen();
+			arsinit("shutdown");
 		}
 		else {
 			cout << "Canceled." << endl;
 		}
 	}
 	else if (ex_c == "shutdown") {
-		acpiRequest = 1;
-		arslogon("logoutRequest");
-		throw SessionEnd{ 1 };
+		arslogon("logoutRequest", "", "");
+		arsinit("shutdown");
 	}
 	else if (ex_c == "hibernate") {
 		BarOSkrnl("hibernate");
 	}
 	else if (ex_c == "reboot") {
-		acpiRequest = 2;
-		arslogon("logoutRequest");
-		throw SessionEnd{ 2 };
+		arslogon("logoutRequest", "", "");
+		arsinit("reboot");
 	}
 	else if (ex_c == "lock") {
 		acpiRequest = 0;
-		arslogon("logoutRequest");
+		arslogon("logoutRequest", "", "");
 		throw SessionEnd{ 0 };
 	}
 	else if (ex_c == "bsod") bsod("666");
-	else if (ex_c == "wait_mode") arslogon("waitMode");
+	else if (ex_c == "wait_mode") arslogon("waitMode", "", "");
 	else if (ex_c == "adduser") {
 		string nu, np;
 		cout << "Username: ";
@@ -5649,9 +5700,8 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "reboot_to_recovery") {
 		recoveryRequest = 1;
-		acpiRequest = 2;
-		arslogon("logoutRequest");
-		throw SessionEnd{ 2 };
+		arslogon("logoutRequest", "", "");
+		arsinit("reboot");
 	}
 	else if (ex_c == "edit") {
 		string ef, et;
@@ -5801,7 +5851,8 @@ void core(const string& cmd) {
 
 		while (getline(ss, line)) {
 			if (line.find("WARNING:") != string::npos ||
-				line.find("CRITICAL:") != string::npos) {
+				line.find("CRITICAL:") != string::npos ||
+				line.find("AUDIT:") != string::npos) {
 				filtered_log += line + "\n";
 			}
 		}
@@ -6028,7 +6079,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 				}
 			}
 		}
-		VersionBarOSkrnl = "24.2";
+		VersionBarOSkrnl = "25.0";
 		char buffer[MAX_PATH];
 		GetModuleFileNameA(NULL, buffer, MAX_PATH);
 		string_view exePath(buffer);
@@ -6380,6 +6431,7 @@ void BarOSkrnl(string_view Kernel_mode) {
 			}
 		}
 		setColor("0f");
+		string p_in;
 		for (int i = 1; i <= 12; i++) {
 			clearScreen();
 			cout << "======================================================================================================================" << endl;
@@ -6394,18 +6446,18 @@ void BarOSkrnl(string_view Kernel_mode) {
 			cout << "                                                     _____________" << endl;
 
 			switch (i) {
-			case 12: cout << "                                                    |..           |" << endl; break;
-			case 11: cout << "                                                    |...          |" << endl; break;
-			case 10: cout << "                                                    | ...         |" << endl; break;
-			case 9: cout << "                                                    |  ...        |" << endl; break;
-			case 8: cout << "                                                    |   ...       |" << endl; break;
-			case 7: cout << "                                                    |    ...      |" << endl; break;
-			case 6: cout << "                                                    |     ...     |" << endl; break;
-			case 5: cout << "                                                    |      ...    |" << endl; break;
-			case 4: cout << "                                                    |       ...   |" << endl; break;
-			case 3: cout << "                                                    |        ...  |" << endl; break;
-			case 2: cout << "                                                    |         ... |" << endl; break;
 			case 1: cout << "                                                    |          ...|" << endl; break;
+			case 2: cout << "                                                    |         ... |" << endl; break;
+			case 3: cout << "                                                    |        ...  |" << endl; break;
+			case 4: cout << "                                                    |       ...   |" << endl; break;
+			case 5: cout << "                                                    |      ...    |" << endl; break;
+			case 6: cout << "                                                    |     ...     |" << endl; break;
+			case 7: cout << "                                                    |    ...      |" << endl; break;
+			case 8: cout << "                                                    |   ...       |" << endl; break;
+			case 9: cout << "                                                    |  ...        |" << endl; break;
+			case 10: cout << "                                                    | ...         |" << endl; break;
+			case 11: cout << "                                                    |...          |" << endl; break;
+			case 12: cout << "                                                    |..           |" << endl; break;
 			}
 			cout << "                                                     -------------" << endl;
 			Sleep(230);
@@ -6421,29 +6473,27 @@ void BarOSkrnl(string_view Kernel_mode) {
 			currentUser == "BarOS SERVICE\\SysPulse" ||
 			currentUser == "BarOS SERVICE\\NetMonitor") {
 			fs::remove(configRoot + "\\hibernate.sys");
-			LSASS("CreateToken", nullptr, currentUser, "");
+			LSASS("CreateTokenNoPass", nullptr, currentUser, "");
 			interfaceScreen();
 		}
 		if (currentUser == "BarOS\\KERNEL") {
 			fs::remove(configRoot + "\\hibernate.sys");
 			earlycons = 1;
-			LSASS("CreateToken", nullptr, currentUser, "");
+			LSASS("CreateTokenNoPass", nullptr, currentUser, "");
 			interfaceScreen();
 		}
 		if (currentUser == "BarOS AUTHORITY\\SYSTEM") currentUser = "SYSTEM";
 		setColor("5b");
 		while (true) {
 			clearScreen();
-			u_in = currentUser;
-			if (LSASS("CheckPassNoLog", nullptr, u_in, "") == SUCCESS_CHECK_PASSWORD) {
-				p_in = "";
-				arslogon("authorization");
+			p_in.clear();
+			if (LSASS("CheckPassNoLog", nullptr, currentUser, "") == SUCCESS_CHECK_PASSWORD) {
+				arslogon("authorization", currentUser, "");
 				break;
 			}
 			cout << "Enter password for " << currentUser << ": ";
 			// Hide password input
 			char ch;
-			p_in = "";
 			while ((ch = _getch()) != '\r') {
 				if (ch == '\b') {
 					if (!p_in.empty()) {
@@ -6458,15 +6508,14 @@ void BarOSkrnl(string_view Kernel_mode) {
 			}
 			cout << endl;
 			requestFromResume = 1;
-			arslogon("authorization");
+			arslogon("authorization", currentUser, p_in);
 			if (!requestFromResume) break;
 		}
 		return;
 	}
 	if (Kernel_mode == "EARLY_LAUNCH_CONSOLE") {
 		earlycons = 1;
-		LSASS("Init", nullptr, "", "");
-		LSASS("CreateToken", nullptr, "BarOS\\KERNEL", "");
+		LSASS("CreateTokenNoPass", nullptr, "BarOS\\KERNEL", "");
 		SMSS();
 		return;
 	}
@@ -6497,7 +6546,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 1";
+	string Title = getOSName() + " Beta 2";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
