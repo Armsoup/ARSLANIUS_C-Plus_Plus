@@ -70,9 +70,17 @@ Build 383
 Initially, the number 243 was taken as the approximate total count of compilations, 
 but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 
+# Emerald (Stable)
+
 • ARSLANIUS 31 Release - build 383
 
+No service packs
+
+# Aurora (Beta)
+
 • ARSLANIUS 32 Beta 1 - build 413
+
+• ARSLANIUS 32 Beta 2 - build 430
 
 * * *
 
