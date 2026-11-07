@@ -12,11 +12,8 @@
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
 
-/////////////////////////////////////////////////////////////////////////////
-// Русский (Россия) resources
-
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_RUS)
-LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
+LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
 #pragma code_page(1251)
 
 #ifdef APSTUDIO_INVOKED
@@ -50,13 +47,13 @@ END
 // WAVE
 //
 
-IDR_WAVE1               WAVE                    "C:\\Users\\User\\source\\repos\\ARSLANIUS\\ARSLANIUS\\sound.wav"
+IDR_WAVE1               WAVE                    ".\\sound.wav"
 
-IDR_WAVE2               WAVE                    "C:\\Users\\User\\source\\repos\\ARSLANIUS\\ARSLANIUS\\logon.wav"
+IDR_WAVE2               WAVE                    ".\\logon.wav"
 
-IDR_WAVE3               WAVE                    "C:\\Users\\User\\source\\repos\\ARSLANIUS\\ARSLANIUS\\logoff.wav"
+IDR_WAVE3               WAVE                    ".\\logoff.wav"
 
-#endif    // Русский (Россия) resources
+#endif
 /////////////////////////////////////////////////////////////////////////////
 
 

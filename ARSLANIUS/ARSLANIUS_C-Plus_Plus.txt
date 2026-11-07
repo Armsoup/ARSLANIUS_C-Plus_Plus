@@ -3,7 +3,7 @@
 #pragma once
 #include <string>
 
-const std::string CURRENT_BUILD = "430";
+const std::string CURRENT_BUILD = "441";
 // arslanius.h - ARSLANIUS Driver SDK
 #ifndef ARSLANIUS_SDK_H
 #define ARSLANIUS_SDK_H
@@ -73,6 +73,7 @@ typedef int (*DriverInitFunc)(ARSLANIUS_API* api);
 #include <algorithm>
 #include <cctype>
 #include <conio.h>
+#include <charconv>
 #include <direct.h>
 #include <io.h>
 #include <filesystem>
@@ -313,15 +314,22 @@ static token Token;
 // =====================================================================
 // FORWARD DECLARATIONS
 // =====================================================================
-void BarOSkrnl(string_view Kernel_mode);
+string ParseDownloadUrl(const string& json, const string& assetName);
 string GenerateSID(string_view user);
-DWORD LSASS(string_view action, string* out = nullptr, const string& user = "", string_view additional = "");
+string formatDouble(double value);
+string readFile(const string& path);
+string trim(string_view s);
+string calculateHash(string_view input);
+string ParseTagName(string_view json);
+string getCurrentDateTime();
+string getUptime();
+string getOSName();
+string CheckForUpdates();
+void BarOSkrnl(string_view Kernel_mode);
 void SERVICES(const string& ServiceToStart);
 void arsinit(string_view action);
 void SMSS();
 void pause();
-string getOSName();
-bool isWindowsTerminal();
 void loadBCD();
 void saveBCD();
 void bootMenu();
@@ -337,13 +345,7 @@ void memoryDiag();
 void logonScreen();
 void check_all();
 void applyColor();
-string CheckForUpdates();
-string ParseTagName(const string& json);
-int ParseBuildNumber(const string& s);
-bool IsNewerAvailable(const string& remoteTag, const string& localBuild);
 void RunArsUpdateOnce();
-string ParseDownloadUrl(const string& json, const string& assetName);
-bool DownloadFile(const string& url, const string& destPath);
 void cmdLoop();
 void print_slow(string_view text, int delay);
 void check_AUTHORITY();
@@ -354,31 +356,30 @@ void BSOD_Runner();
 void check_BCD();
 void installapp(string_view app_id);
 void core(const string& cmd);
-bool checkHash(string_view input, string_view expectedHash);
-string calculateHash(string_view input);
 void bsod(string_view code);
 void arslogon(string_view authority, const string& username, string_view password);
 void shutdownScreen();
 void interfaceScreen();
-int getrand(int min, int max);
-bool fileExists(string_view path);
-bool dirExists(string_view path);
-vector<string> split(const string& s, char delimiter);
-string trim(const string& s);
-string getCurrentDateTime();
-string getUptime();
 void writeLog(string_view message, string_view importance);
-string readFile(const string& path);
 void writeFile(const string& path, string_view content);
 void appendFile(const string& path, string_view content);
-void setColor(const string& colorCode);
+void setColor(string_view colorCode);
 void SetConsoleWidthOnly(int newWidth);
-string formatDouble(double value);
 void garbage_collector();
-double evaluateWithVars(const string& expr, size_t& pos);
-bool evaluateStringCondition(const string& expr);
-void executeLine(const string& line);
+void executeLine(string_view line);
 void runScript(const string& path);
+bool IsNewerAvailable(string_view remoteTag, string_view localBuild);
+bool DownloadFile(const string& url, const string& destPath);
+bool checkHash(string_view input, string_view expectedHash);
+bool fileExists(string_view path);
+bool dirExists(string_view path);
+bool evaluateStringCondition(string_view expr);
+bool isWindowsTerminal();
+int getrand(int min, int max);
+int ParseBuildNumber(string_view s);
+double evaluateWithVars(string_view expr, size_t& pos);
+DWORD LSASS(string_view action, string* out = nullptr, const string& user = "", string_view additional = "");
+vector<string> split(const string& s, char delimiter);
 namespace fs = filesystem;
 
 // =====================================================================
@@ -410,11 +411,11 @@ string GetSID() {
 	return Token.sid;
 }
 
-string trim(const string& s) {
+string trim(string_view s) {
 	size_t start = s.find_first_not_of(" \t\r\n");
 	if (start == string::npos) return "";
 	size_t end = s.find_last_not_of(" \t\r\n");
-	return s.substr(start, end - start + 1);
+	return string(s.substr(start, end - start + 1));
 }
 
 int getrand(int min, int max) {
@@ -507,7 +508,7 @@ void writeLog(string_view message, string_view importance) {
 	lock_guard<mutex> lock(log_mutex);
 	ofstream log(logPath, ios::app);
 	if (log.is_open()) {
-		log << "[" << getCurrentDateTime() << "]" << " " << importance << ": " << message << endl;
+		log << "[" << getCurrentDateTime() << "] " << importance << ": " << message << endl;
 	}
 }
 
@@ -559,7 +560,7 @@ void garbage_collector() {
 	}
 }
 
-double evaluateWithVars(const string& expr, size_t& pos) {
+double evaluateWithVars(string_view expr, size_t& pos) {
 	stack<double> values;
 	stack<char> ops;
 
@@ -673,7 +674,7 @@ double evaluateWithVars(const string& expr, size_t& pos) {
 	return values.empty() ? 0.0 : values.top();
 }
 
-bool evaluateStringCondition(const string& expr) {
+bool evaluateStringCondition(string_view expr) {
 	string clean_expr = trim(expr);
 
 	char op = 0;
@@ -732,7 +733,7 @@ bool evaluateStringCondition(const string& expr) {
 }
 
 struct ScriptEnd {};
-void executeLine(const string& line) {
+void executeLine(string_view line) {
 	string trimmed = trim(line);
 
 	size_t inline_comment = trimmed.find("//");
@@ -818,7 +819,7 @@ void executeLine(const string& line) {
 			fake_ram[varName] = { string(1, TEMP), chrono::steady_clock::now() };
 		}
 	}
-	else if (command == "wakeupvar") { // This command is needed because the GC clears variables every 30 minutes; so, instead of writing `print x`, write `wakeupvar x`.
+	else if (command == "wakeupvar") { // This command is needed because the GC clears variables every 30 minutes; so, instead of writing 'print x', write 'wakeupvar x'.
 		string target = trim(args);
 		lock_guard<mutex> lock(ram_mutex);
 		auto it = fake_ram.find(target);
@@ -1306,13 +1307,11 @@ void clearScreen() {
 	}
 }
 
-void setColor(const string& colorCode) {
+void setColor(string_view colorCode) {
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 	int color;
-	try {
-		color = stoi(colorCode, nullptr, 16);
-	}
-	catch (...) {
+	auto [ptr, ec] = from_chars(colorCode.data(), colorCode.data() + colorCode.size(), color, 16);
+	if (ec != errc()) {
 		color = 7;
 	}
 	SetConsoleTextAttribute(hConsole, (WORD)color);
@@ -2124,16 +2123,16 @@ string CheckForUpdates() {
 	return response;
 }
 
-string ParseTagName(const string& json) {
+string ParseTagName(string_view json) {
 	size_t pos = json.find("\"tag_name\":\"");
 	if (pos == string::npos) return "";
 	pos += 12;
 	size_t end = json.find('"', pos);
 	if (end == string::npos) return "";
-	return json.substr(pos, end - pos);
+	return string(json.substr(pos, end - pos));
 }
 
-int ParseBuildNumber(const string& s) {
+int ParseBuildNumber(string_view s) {
 	string digits;
 	for (char c : s) if (isdigit(c)) digits += c;
 	if (digits.empty()) return 0;
@@ -2141,7 +2140,7 @@ int ParseBuildNumber(const string& s) {
 	catch (...) { return 0; }
 }
 
-bool IsNewerAvailable(const string& remoteTag, const string& localBuild) {
+bool IsNewerAvailable(string_view remoteTag, string_view localBuild) {
 	int remote = ParseBuildNumber(remoteTag);
 	int local = ParseBuildNumber(localBuild);
 	return remote > local;
@@ -2533,7 +2532,7 @@ void Manual() {
 	cout << "[ COMMANDS ]" << endl;
 	cout << "  System: help, lock, alias, wu, update-install, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
 	cout << "  Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
-	cout << "  Admin: adduser, text_to_sha256, deluser, passwd, regedit, bcdedit, bcdboot, sc, reset" << endl;
+	cout << "  Admin: adduser, text_to_sha256, deluser, passwd, as-var, regedit, bcdedit, bcdboot, sc, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
 	cout << "  Recovery: backup, backup-restore, restore-point, restore, sfc, events" << endl;
 	cout << "  Fun: bsod, Notepad, as-interpreter, old.calculator, calc, wait_mode, echo, game.bsodrunner" << endl;
@@ -2608,9 +2607,7 @@ void bsod(string_view code) {
 	clearScreen();
 	thread soundThread([]() { Beep(750, 1710); });
 	soundThread.detach();
-	string vd(code);
-	vd = trim(vd);
-	writeLog("SYSTEM: A BSoD with error code " + vd + " was triggered.", "CRITICAL");
+	writeLog("SYSTEM: A BSoD with error code " + trim(string(code)) + " was triggered.", "CRITICAL");
 
 	if (code == "1a") {
 		setColor("17");
@@ -2945,7 +2942,7 @@ void bsod(string_view code) {
 		print_slow("It's very bad, but the SAM will be restored automatically, and all changes will be reset.", 2);
 		cout << endl;
 		print_slow("Technical information:", 2);
-		print_slow("*** SAM does not match the memory.", 2);
+		print_slow("*** SAM doesn't match the memory.", 2);
 		cout << endl;
 		print_slow("If this is the first time you've seen this error, restart the system.", 2);
 		cout << endl;
@@ -3063,7 +3060,7 @@ void bootMenu() {
 			cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
 			cout << " -Your license is automatically TERMINATED" << endl;
 			cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
-			cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
+			cout << " -The author(I'm, Armsoup) has the right to sue you" << endl;
 			cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
 			cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
 			cout << endl;
@@ -3652,8 +3649,7 @@ void memoryDiag() {
 // =====================================================================
 
 void logonScreen() {
-	string u_in;
-	string p_in;
+	string u_in, p_in;
 	while (true) {
 		currentUser = "BarOS AUTHORITY\\LogonAuthorityUser";
 		if (!dirExists(HomeDefault)) {
@@ -3919,8 +3915,8 @@ void arslogon(string_view authority, const string& username, string_view passwor
 		if (resCheck == SUCCESS_CHECK_PASSWORD) {
 			// Success
 			if (LSASS("CreateToken", nullptr, username, p_in) == ERROR_ACCESS_DENIED_TOKEN) {
-				cout << "Critical error while creating a token! Login is not possible." << endl;
-				writeLog("arslogon: The token was not created; further login is not possible.", "AUDIT");
+				cout << "Critical error while creating a token! Login isn't possible." << endl;
+				writeLog("arslogon: The token was not created; further login isn't possible.", "AUDIT");
 				pause();
 				return;
 			}
@@ -4144,7 +4140,7 @@ void arslogon(string_view authority, const string& username, string_view passwor
 	if (authority == "SecureAS_lockmenu") {
 		if (!hSasBuffer || !SetConsoleActiveScreenBuffer(hSasBuffer)) {
 			// Very clever words, in the spirit of Microsoft
-			cout << "Critical error in the arslogon subsystem; this call is not available." << endl;
+			cout << "Critical error in the arslogon subsystem; this call isn't available." << endl;
 			return;
 		}
 		CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -4197,7 +4193,7 @@ void arslogon(string_view authority, const string& username, string_view passwor
 		string p_in;
 		while (true) {
 			if (LSASS("CheckPassNoLog", nullptr, currentUser, "") == SUCCESS_CHECK_PASSWORD || GetSID() == "S-7-0-1") break;
-			cout << "Enter p_in for " << currentUser << ": ";
+			cout << "Enter password for " << currentUser << ": ";
 			// Hide password input
 			char ch;
 			while ((ch = _getch()) != '\r') {
@@ -4247,6 +4243,16 @@ void arslogon(string_view authority, const string& username, string_view passwor
 		ss << "COLOR=" << color_user << endl;
 		ss << "ENABLE_AUTORUN=" << autorun << endl;
 		writeFile(ConfigPath, ss.str());
+		if (IsGuest()) {
+			userHome = sysProf;
+			CurrentPath = sysProf;
+			SetCurrentDirectoryA(sysProf.c_str());
+			fs::path pathToRemove = usersRoot + "\\GUEST";
+			if (fs::exists(pathToRemove)) {
+				fs::remove_all(pathToRemove);
+			}
+		}
+		fake_ram.clear();
 		Token.sid.clear();
 		Token.privilege = PRIV_SYSTEM;
 		Sleep(2000);
@@ -4289,32 +4295,32 @@ void applyColor() {
 
 void interfaceScreen() {
 	clearScreen();
-	if (currentUser != "KERNEL") { successfulboot = bootcount; saveBCD(); }
+	if (GetSID() != "S-7-0-1") { successfulboot = bootcount; saveBCD(); }
 	if (currentUser.find("LogonAuthorityUser") != string::npos) {
 		cout << "CRITICAL ERROR: Access for restricted service accounts is prohibited." << endl;
 		pause();
 		logonScreen();
 	}
 
-	if (rec) {
+	if (GetSID() == "S-7-0-18") {
 		currentUser = "BarOS SERVICE\\TrustedInstaller";
 		userHome = sysServices + "\\TrustedInstaller";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
 	}
-	if (diagnostic == 1) {
+	if (GetSID() == "S-7-0-19") {
 		currentUser = "BarOS SERVICE\\SysPulse";
 		userHome = sysServices + "\\SysPulse";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
 	}
-	if (diagnostic == 2) {
+	if (GetSID() == "S-7-0-20") {
 		currentUser = "BarOS SERVICE\\NetMonitor";
 		userHome = sysServices + "\\NetMonitor";
 		CurrentPath = userHome;
 		fs::create_directories(CurrentPath);
 	}
-	if (earlycons) {
+	if (GetSID() == "S-7-0-1") {
 		currentUser = "BarOS\\KERNEL";
 		userHome = sysProf;
 		CurrentPath = userHome;
@@ -4390,74 +4396,87 @@ void interfaceScreen() {
 
 void cmdLoop() {
 	while (true) {
-		// Prompt
-		if (sudo_command) {
-			LSASS("CreateTokenNoPass", nullptr, currentUser, "");
-			sudo_command = 0;
-		}
-		cmdcalls = 0;
-		cout << currentUser << "@ARSLANIUS> ";
-		string cmd;
-
-		while (true) {
-			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
-				(GetAsyncKeyState(VK_MENU) & 0x8000) &&
-				(GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
-
-				while (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-					Sleep(50);
-				}
-				if (!IsService() && GetSID() != "S-7-0-1") {
-					arslogon("SecureAS_lockmenu", "", "");
-					break;
-				}
+		try {
+			// Prompt
+			if (sudo_command) {
+				LSASS("CreateTokenNoPass", nullptr, currentUser, "");
+				sudo_command = 0;
 			}
+			cmdcalls = 0;
+			cout << currentUser << "@ARSLANIUS> ";
+			string cmd;
 
-			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
-				(GetAsyncKeyState(VK_MENU) & 0x8000) &&
-				(GetAsyncKeyState('K') & 0x8000)) {
+			while (true) {
+				if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+					(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+					(GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
 
-				while (GetAsyncKeyState('K') & 0x8000) {
-					Sleep(50);
-				}
-				if (!IsService() && GetSID() != "S-7-0-1") {
-					BarOSkrnl("reload");
-					break;
-				}
-			}
-
-			if (g_samViolation) {
-				g_samViolation = 0;
-				acpiRequest = 19;
-				throw SessionEnd{ 2 };
-			}
-
-			if (_kbhit()) {
-				char ch = _getch();
-
-				if (ch == '\r' || ch == '\n') {
-					cout << endl;
-					break;
-				}
-				else if (ch == '\b') {
-					if (!cmd.empty()) {
-						cmd.pop_back();
-						cout << "\b \b";
+					while (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+						Sleep(50);
+					}
+					if (!IsService() && GetSID() != "S-7-0-1") {
+						arslogon("SecureAS_lockmenu", "", "");
+						break;
 					}
 				}
-				else if (ch >= 32 && ch <= 126) {
-					cmd += ch;
-					cout << ch;
+
+				if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+					(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+					(GetAsyncKeyState('K') & 0x8000)) {
+
+					while (GetAsyncKeyState('K') & 0x8000) {
+						Sleep(50);
+					}
+					if (!IsService() && GetSID() != "S-7-0-1") {
+						BarOSkrnl("reload");
+						break;
+					}
 				}
+
+				if (g_samViolation) {
+					g_samViolation = 0;
+					acpiRequest = 19;
+					throw SessionEnd{ 2 };
+				}
+
+				if (_kbhit()) {
+					char ch = _getch();
+
+					if (ch == '\r' || ch == '\n') {
+						cout << endl;
+						break;
+					}
+					else if (ch == '\b') {
+						if (!cmd.empty()) {
+							cmd.pop_back();
+							cout << "\b \b";
+						}
+					}
+					else if (ch >= 32 && ch <= 126) {
+						cmd += ch;
+						cout << ch;
+					}
+				}
+
+				Sleep(10);
 			}
 
-			Sleep(10);
+			cmd = trim(cmd);
+			if (cmd.empty()) continue;
+
+			core(cmd);
 		}
-
-		cmd = trim(cmd);
-		if (cmd.empty()) continue;
-
-		core(cmd);
+		catch (const SessionEnd&) { throw SessionEnd{ acpiRequest }; }
+		catch (const exception& e) {
+			cout << endl;
+			cout << "The command failed with an error: " << e.what() << endl;
+			continue;
+		}
+		catch (...) {
+			cout << endl;
+			cout << "The command finished with an unexpected error" << endl;
+			continue;
+		}
 	}
 }
 
@@ -4644,7 +4663,7 @@ void core(const string& cmd) {
 
 	if (IsUser()) {
 		bool restricted = false;
-		vector<string> userCmds = { "sc", "msg-all", "broadcast", "alert", "text_to_sha256", "guest-toggle",
+		vector<string> userCmds = { "sc", "msg-all", "as-var", "broadcast", "alert", "text_to_sha256", "guest-toggle",
 									"adduser", "deluser", "sfc", "events", "edit", "bcdboot", "bcdedit",
 									"regedit", "ipconfig", "arp", "route", "netstat", "nslookup", "tracert",
 									"bsod", "reset", "rm", "report", "reboot_to_recovery" };
@@ -4661,10 +4680,78 @@ void core(const string& cmd) {
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, old.calculator, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo, game.bsodrunner" << endl;
 		cout << "System: Help, Lock, wu, update-install, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
-		cout << "Admin: adduser, deluser, alert, sc, Guest, text_to_sha256, report, reset, reboot_to_recovery, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
+		cout << "Admin: adduser, deluser, alert, sc, Guest, text_to_sha256, report, reset, reboot_to_recovery, as-var, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
 	else if (ex_c == "ver") cout << getOSName() << " [Build " << currentBuild << "]" << endl;
+	else if (ex_c == "as-var") {
+		while (true) {
+			clearScreen();
+			cout << "Select an action:" << endl;
+			cout << "1. Add variable" << endl;
+			cout << "2. Del variable" << endl;
+			cout << "3. Exit" << endl;
+			cout << "Your action: ";
+			char choice = _getch();
+			cout << choice << endl;
+			if (choice == '3') break;
+			switch (choice) {
+			case '1': {
+				lock_guard<mutex> lock(ram_mutex);
+				cout << "Already existing variables:" << endl;
+				for (const auto& [address, cell] : fake_ram) {
+					cout << address << " = " << cell.value << endl;
+				}
+				cout << "Enter the name of the new variable: ";
+				string namevar;
+				string valuevar;
+				getline(cin, namevar);
+				if (!namevar.empty()) {
+					if (fake_ram.find(namevar) == fake_ram.end()) {
+						cout << "Enter the value of the new variable: ";
+						getline(cin, valuevar);
+						if (!valuevar.empty()) {
+							fake_ram[namevar] = { valuevar, chrono::steady_clock::now() };
+							if (fake_ram.find(namevar) != fake_ram.end()) {
+								cout << "The Arslan Script variable has been successfully created!" << endl;
+								pause();
+							}
+						}
+					}
+					else {
+						cout << "Variable " << namevar << " already exists" << endl;
+						pause();
+					}
+				}
+				break;
+			}
+			case '2': {
+				lock_guard<mutex> lock(ram_mutex);
+				cout << "Already existing variables:" << endl;
+				for (const auto& [address, cell] : fake_ram) {
+					cout << address << " = " << cell.value << endl;
+				}
+				cout << "Enter the name of the variable you want to delete: ";
+				string namevar;
+				getline(cin, namevar);
+				if (!namevar.empty()) {
+					if (fake_ram.find(namevar) != fake_ram.end()) {
+						fake_ram.erase(namevar);
+						if (fake_ram.find(namevar) == fake_ram.end()) {
+							cout << "The Arslan Script variable has been successfully deleted!" << endl;
+							pause();
+						}
+					}
+					else {
+						cout << "The variable " << namevar << " doesn't exist" << endl;
+						pause();
+					}
+				}
+				break;
+			}
+			}
+		}
+	}
 	else if (ex_c == "whoami") {
 		cout << "Current User: " << currentUser << endl;
 		cout << "SID: " << GetSID() << endl;
@@ -4707,7 +4794,6 @@ void core(const string& cmd) {
 				cout << "======================================================================================================================" << endl;
 				cout << "                                                        " << name << endl;
 				cout << "======================================================================================================================" << endl;
-				if (!fileExists(sysServices + "\\" + name + ".active")) {}
 				cout << "Status: " << (fileExists(sysServices + "\\" + name + ".active") ? "RUNNING" : "STOPPED") << endl;
 				if (name != "MemoryGuard" && name != "LSASSSecurityChecker") {
 					cout << " [1] Start/Stop" << endl;
@@ -4799,7 +4885,7 @@ void core(const string& cmd) {
 		cout << "If you remove the copyright notice, rename the project, or try to hide its origin:" << endl;
 		cout << " -Your license is automatically TERMINATED" << endl;
 		cout << " -You are violating DMCA(17 U.S.C.§ 1202)" << endl;
-		cout << " -The author(I`m, Armsoup) has the right to sue you" << endl;
+		cout << " -The author(I'm, Armsoup) has the right to sue you" << endl;
 		cout << " -Maximum statutory damages: up to $150, 000 per work" << endl;
 		cout << "In simple terms: STEAL MY CODE, REMOVE MY NAME = YOU'RE F***ED." << endl;
 		cout << endl;
@@ -5211,7 +5297,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "cat") {
 		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
-			cout << "Guests are not permitted to view the contents of files in this folder" << endl;
+			cout << "Guests aren't permitted to view the contents of files in this folder" << endl;
 			return;
 		}
 		string targetFile;
@@ -5246,7 +5332,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "mkdir") {
 		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
-			cout << "Guests are not permitted to create files in this folder" << endl;
+			cout << "Guests aren't permitted to create files in this folder" << endl;
 			return;
 		}
 		string folderName;
@@ -5304,7 +5390,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "touch") {
 		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
-			cout << "Guests are not permitted to create folders within this folder" << endl;
+			cout << "Guests aren't permitted to create folders within this folder" << endl;
 			return;
 		}
 		string touchFile;
@@ -5366,7 +5452,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "rm") {
 		if (IsGuest() && CurrentPath.find(userHome) == string::npos) {
-			cout << "Guests are not permitted to delete files in this folder" << endl;
+			cout << "Guests aren't permitted to delete files in this folder" << endl;
 			return;
 		}
 		string targetFile;
@@ -5978,7 +6064,7 @@ void core(const string& cmd) {
 			it->second(rest);
 		}
 		else {
-			cout << "\"" << ex_c << "\" is not recognized." << endl;
+			cout << "\"" << ex_c << "\" isn't recognized." << endl;
 		}
 	}
 }
@@ -6603,7 +6689,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 2";
+	string Title = getOSName() + " Beta 3";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
