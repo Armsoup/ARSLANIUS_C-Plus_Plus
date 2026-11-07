@@ -82,6 +82,8 @@ No service packs
 
 • ARSLANIUS 32 Beta 2 - build 430
 
+• ARSLANIUS 32 Beta 3 - build 441
+
 * * *
 
 # ARSLANIUS Driver SDK
