@@ -76,13 +76,15 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 
 No service packs
 
-# Aurora (Beta)
+# Aurora (Testing)
 
 • ARSLANIUS 32 Beta 1 - build 413
 
 • ARSLANIUS 32 Beta 2 - build 430
 
 • ARSLANIUS 32 Beta 3 - build 441
+
+• ARSLANIUS 32 RC - build 460
 
 * * *
 
