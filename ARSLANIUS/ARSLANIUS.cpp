@@ -354,6 +354,12 @@ string GetSID() {
 	return Token.sid;
 }
 
+bool NotDefined() {
+	bool a = !IsService() && !IsSystem() && !IsAdmin() && !IsUser() && !IsGuest();
+	bool b = (Token.privilege == PRIV_NONE) || (trim(Token.sid) == "");
+	return a || b;
+}
+
 string trim(string_view s) {
 	size_t start = s.find_first_not_of(" \t\r\n");
 	if (start == string::npos) return "";
@@ -1382,7 +1388,7 @@ DWORD LSASS(string_view action, string* out, const string& user, string_view add
 	}
 	else if (action == "CreateToken" || action == "CreateTokenNoPass") {
 		Token.sid = GenerateSID(user);
-		if (Token.sid != "S-7-0-18" && Token.sid != "S-7-0-19" && Token.sid != "S-7-0-20" && user != "BarOS AUTHORITY\\LogonAuthorityUser" && user != "BarOS\\KERNEL") {
+		if (Token.sid != "S-7-0-18" && Token.sid != "S-7-0-19" && Token.sid != "S-7-0-20" && Token.sid != "S-7-0-8" && Token.sid != "S-7-0-1") {
 			if (action != "CreateTokenNoPass") {
 				if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) return ERROR_ACCESS_DENIED_TOKEN;
 			}
@@ -1796,6 +1802,7 @@ string GenerateSID(string_view user) {
 	unsigned int b = stoul(hash.substr(8, 8), nullptr, 16);
 	unsigned int c = stoul(hash.substr(16, 8), nullptr, 16);
 	string domain = to_string(a) + "-" + to_string(b) + "-" + to_string(c);
+	if (user == "LogonAuthorityUser" || user == "BarOS AUTHORITY\\LogonAuthorityUser") return "S-7-0-8";
 	if (user == "SYSTEM" || user == "BarOS AUTHORITY\\SYSTEM") return "S-7-0-9";
 	if (user == "KERNEL" || user == "BarOS\\KERNEL") return "S-7-0-1";
 	if (user == "BarOS SERVICE\\TrustedInstaller") return "S-7-0-18";
@@ -2473,7 +2480,7 @@ void Manual() {
 	cout << "  - Auto-boot in " << bootTimeout << " seconds" << endl;
 	cout << endl;
 	cout << "[ COMMANDS ]" << endl;
-	cout << "  System: help, lock, alias, wu, update-install, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
+	cout << "  System: help, lock, alias, wu, anonymous, auth, update-install, hibernate, rebootemer or arslogon -emergency reboot, cls, ver, confeditor, whoami, reboot, shutdown, lockmenu [ctrl alt shift]" << endl;
 	cout << "  Files: ls, cd, cat, ren, mkdir, touch, edit, cp, mv, rm" << endl;
 	cout << "  Admin: adduser, text_to_sha256, deluser, passwd, as-var, regedit, bcdedit, bcdboot, sc, reset" << endl;
 	cout << "  Network: ping, netstat, ipconfig, tracert, nslookup, arp, route" << endl;
@@ -3107,6 +3114,10 @@ void bootMenu() {
 			switch (choice) {
 			case 'y': {
 				requestFromResume = 1;
+				rec = 0;
+				diagnostic = 0;
+				recoveryRequest = 0;
+				earlycons = 0;
 				SMSS();
 				break;
 			}
@@ -3187,46 +3198,12 @@ void bootMenu() {
 }
 
 void normalBoot() {
-	// Check config
-	if (!recoveryRequest) {
-		int difference = bootcount - successfulboot;
-		if (difference > 3) {
-			clearScreen();
-			cout << "                                                  Please Wait..." << endl;
-			Sleep(2500);
-			cout << endl;
-			cout << "                                         Initiating automatic recovery..." << endl;
-			writeLog("SYSTEM: Automatic recovery started", "INFO");
-			for (int i = 1; i <= 20; i++) {
-				clearScreen();
-				cout << "                                                  Please Wait..." << endl;
-				cout << endl;
-				switch (i) {
-				case 1: cout << "                                         Initiating automatic recovery" << endl; break;
-				case 2: cout << "                                         Initiating automatic recovery." << endl; break;
-				case 3: cout << "                                         Initiating automatic recovery.." << endl; break;
-				case 4: cout << "                                         Initiating automatic recovery..." << endl; break;
-				case 5: cout << "                                         Initiating automatic recovery" << endl; break;
-				case 6: cout << "                                         Initiating automatic recovery." << endl; break;
-				case 7: cout << "                                         Initiating automatic recovery.." << endl; break;
-				case 8: cout << "                                         Initiating automatic recovery..." << endl; break;
-				case 9: cout << "                                         Initiating automatic recovery" << endl; break;
-				case 10: cout << "                                         Initiating automatic recovery." << endl; break;
-				case 11: cout << "                                         Initiating automatic recovery.." << endl; break;
-				case 12: cout << "                                         Initiating automatic recovery..." << endl; break;
-				case 13: cout << "                                         Initiating automatic recovery" << endl; break;
-				case 14: cout << "                                         Initiating automatic recovery." << endl; break;
-				case 15: cout << "                                         Initiating automatic recovery.." << endl; break;
-				case 16: cout << "                                         Initiating automatic recovery..." << endl; break;
-				case 17: cout << "                                         Initiating automatic recovery" << endl; break;
-				case 18: cout << "                                         Initiating automatic recovery." << endl; break;
-				case 19: cout << "                                         Initiating automatic recovery.." << endl; break;
-				case 20: cout << "                                         Initiating automatic recovery..." << endl; break;
-				}
-				Sleep(400);
-			}
-			AutoRepair();
-		}
+	bool isRepair = (!recoveryRequest && (bootcount - successfulboot > 3));
+
+	if (isRepair) {
+		writeLog("SYSTEM: Automatic recovery started", "INFO");
+	}
+	else if (!recoveryRequest) {
 		if (!dirExists(configRoot)) {
 			bsod("1a");
 			return;
@@ -3236,45 +3213,72 @@ void normalBoot() {
 			return;
 		}
 	}
-	// Boot animation
-	setColor("0f");
-	for (int i = 1; i <= 20; i++) {
-		clearScreen();
-		cout << "======================================================================================================================" << endl;
-		cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
-		cout << "======================================================================================================================" << endl;
-		cout << "                                                  Loading " << getOSName() << endl;
-		cout << endl;
-		cout << "         Build: " << currentBuild << endl;
-		cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
-		cout << "         © Armsoup 2026" << endl;
-		cout << endl;
-		cout << "                                                     _____________" << endl;
 
-		switch (i) {
-		case 1: cout << "                                                    |.            |" << endl; break;
-		case 2: cout << "                                                    |..           |" << endl; break;
-		case 3: cout << "                                                    |...          |" << endl; break;
-		case 4: cout << "                                                    | ...         |" << endl; break;
-		case 5: cout << "                                                    |  ...        |" << endl; break;
-		case 6: cout << "                                                    |   ...       |" << endl; break;
-		case 7: cout << "                                                    |    ...      |" << endl; break;
-		case 8: cout << "                                                    |     ...     |" << endl; break;
-		case 9: cout << "                                                    |      ...    |" << endl; break;
-		case 10: cout << "                                                    |       ...   |" << endl; break;
-		case 11: cout << "                                                    |        ...  |" << endl; break;
-		case 12: cout << "                                                    |         ... |" << endl; break;
-		case 13: cout << "                                                    |          ...|" << endl; break;
-		case 14: cout << "                                                    |           ..|" << endl; break;
-		case 15: cout << "                                                    |            .|" << endl; break;
-		case 16: cout << "                                                    |             |" << endl; break;
-		case 17: cout << "                                                    |.            |" << endl; break;
-		case 18: cout << "                                                    |..           |" << endl; break;
-		case 19: cout << "                                                    |...          |" << endl; break;
-		case 20: cout << "                                                    | ...         |" << endl; break;
+	const string frames[] = {
+		"|             |",
+		"|.            |",
+		"|..           |",
+		"|...          |",
+		"| ...         |",
+		"|  ...        |",
+		"|   ...       |",
+		"|    ...      |",
+		"|     ...     |",
+		"|      ...    |",
+		"|       ...   |",
+		"|        ...  |",
+		"|         ... |",
+		"|          ...|",
+		"|           ..|",
+		"|            .|"
+	};
+	const int frameCount = 16;
+
+	int totalTicks = isRepair ? (frameCount * 6) : (recoveryRequest ? (frameCount * 4) : 20);
+
+	setColor("0f");
+	clearScreen();
+
+	for (int i = 0; i < totalTicks; i++) {
+		string frame;
+		frame += "\x1b[H";
+		if (!recoveryRequest) {
+			frame += "======================================================================================================================  \n";
+			frame += "                                                 ARSLANIUS BOOT MANAGER  \n";
+			frame += "======================================================================================================================  \n";
+			frame += "                                                  Loading " + getOSName() + "  \n\n";
+			frame += "         Build: " + currentBuild + "  \n";
+			frame += "         Kernel: BarOS " + VersionBarOSkrnl + "  \n";
+			frame += "         © Armsoup 2026  \n\n";
 		}
-		cout << "                                                     -------------" << endl;
+		else {
+			frame += "  \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+		}
+		frame += "                                                     _____________  \n";
+		frame += "                                                    " + frames[i % frameCount] + "  \n";
+		frame += "                                                     -------------  \n";
+		if (recoveryRequest) {
+			frame += "  \n";
+			frame += "                                                     © Armsoup 2026  \n";
+		}
+
+		if (isRepair) {
+			frame += "  \n";
+			if (i < frameCount * 2) {
+				frame += "                                            Preparing Automatic Repair...  \n";
+			}
+			else {
+				frame += "                                                 Diagnosing your PC...  \n";
+			}
+		}
+
+		cout << frame << flush;
 		Sleep(230);
+	}
+
+	if (isRepair) {
+		AutoRepair();
+		return;
 	}
 	if (recoveryRequest) {
 		recoveryRequest = 0;
@@ -3925,30 +3929,31 @@ void arslogon(string_view authority, const string& username, string_view passwor
 			if (regKey == "SYSTEM_COLOR") color_welcome_screen = systemColor;
 			if (regKey == "ADMIN_COLOR") color_welcome_screen = adminColor;
 			if (regKey == "USER_COLOR") color_welcome_screen = userColor;
-			for (int i = 1; i <= 9; i++) {
-				setColor(color_welcome_screen);
-				clearScreen();
-				cout << "======================================================================================================================" << endl;
-				cout << "                                                            ARSLOGON" << endl;
-				cout << "======================================================================================================================" << endl;
-				cout << "                                                          " << getOSName() << endl;
-				cout << endl;
-				cout << "         Build: " << currentBuild << endl;
-				cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
-				cout << "         Uptime: " << getUptime() << endl;
-				cout << endl;
+			setColor(color_welcome_screen);
+			clearScreen();
 
-				switch (i) {
-				case 1: cout << "                                                Applying your personal settings" << endl; break;
-				case 2: cout << "                                                Applying your personal settings." << endl; break;
-				case 3: cout << "                                                Applying your personal settings.." << endl; break;
-				case 4: cout << "                                                Applying your personal settings..." << endl; break;
-				case 5: cout << "                                                Applying your personal settings.." << endl; break;
-				case 6: cout << "                                                Applying your personal settings." << endl; break;
-				case 7: cout << "                                                Applying your personal settings" << endl; break;
-				case 8: cout << "                                                Applying your personal settings." << endl; break;
-				case 9: cout << "                                                Applying your personal settings.." << endl; break;
-				}
+			const string welcomeFrames[] = {
+			 "Applying your personal settings   ",
+			 "Applying your personal settings.  ",
+			 "Applying your personal settings.. ",
+			 "Applying your personal settings..."
+			};
+			const int welcomeFrameCount = 4;
+			const int totalTicks = 9;
+
+			for (int i = 0; i < totalTicks; i++) {
+				string frame;
+				frame += "\x1b[H";
+				frame += "======================================================================================================================  \n";
+				frame += "                                                            ARSLOGON  \n";
+				frame += "======================================================================================================================  \n";
+				frame += "                                                          " + getOSName() + "  \n\n";
+				frame += "         Build: " + currentBuild + "  \n";
+				frame += "         Kernel: BarOS " + VersionBarOSkrnl + "  \n";
+				frame += "         Uptime: " + getUptime() + "  \n\n";
+				frame += "                                                " + welcomeFrames[i % welcomeFrameCount] + "  \n";
+
+				cout << frame << flush;
 				Sleep(500);
 			}
 			defaultuserHome = userHome;
@@ -4074,6 +4079,8 @@ void arslogon(string_view authority, const string& username, string_view passwor
 		adminUser.clear();
 		CurrentPath.clear();
 		userHome.clear();
+		Token.sid.clear();
+		Token.privilege = PRIV_NONE;
 		ConfigPath.clear();
 		defaultuserHome.clear();
 		color_user.clear();
@@ -4239,7 +4246,7 @@ void applyColor() {
 void interfaceScreen() {
 	clearScreen();
 	if (GetSID() != "S-7-0-1") { successfulboot = bootcount; saveBCD(); }
-	if (currentUser.find("LogonAuthorityUser") != string::npos) {
+	if (GetSID() == "S-7-0-8") {
 		cout << "CRITICAL ERROR: Access for restricted service accounts is prohibited." << endl;
 		pause();
 		logonScreen();
@@ -4427,6 +4434,19 @@ void core(const string& cmd) {
 	vector<string> parts = split(cmd, ' ');
 	if (parts.empty()) return;
 
+	if (NotDefined()) {
+		currentUser = "BarOS INDETERMINATE/ANONYMOUS";
+		bool allowed = false;
+		vector<string> aCmds = { "cls", "reboot", "shutdown", "auth" };
+		for (const string& c : aCmds) {
+			if (trim(cmd) == c) { allowed = true; break; }
+		}
+		if (!allowed) {
+			cout << "[ SECURITY ] You do not have permission to execute any commands other than reboot, shutdown, auth, and cls." << endl;
+			return;
+		}
+	}
+
 	if (cmd == "arsinit") {
 		arsinit("");
 	}
@@ -4519,7 +4539,7 @@ void core(const string& cmd) {
 
 	if (GetSID() == "S-7-0-1" && IsSystem()) {
 		bool restricted = false;
-		vector<string> kernelCmds = { "lock", "lockmenu" };
+		vector<string> kernelCmds = { "lock", "lockmenu", "auth", "anonymous" };
 		for (const string& c : kernelCmds) {
 			if (ex_c == c) { restricted = true; break; }
 		}
@@ -4622,7 +4642,7 @@ void core(const string& cmd) {
 
 	if (ex_c == "help" || ex_c == "?") {
 		cout << "Apps: Notepad, old.calculator, Calc, taskmgr, confeditor, license, edit, install, regedit, ArsStore, sysinfo, game.bsodrunner" << endl;
-		cout << "System: Help, Lock, wu, update-install, lockmenu, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
+		cout << "System: Help, Lock, wu, update-install, lockmenu, anonymous, auth, hibernate, sudo, cls, Shutdown, ver, whoami, alias, reboot, clean, events, restore-point, restore, echo, passwd, backup, backup-restore, ls, wait_mode, cd, cat, ren, mkdir, touch, cp, rebootemer or arslogon -emergency reboot, mv, autorun, as-interpreter" << endl;
 		cout << "Admin: adduser, deluser, alert, sc, Guest, text_to_sha256, report, reset, reboot_to_recovery, as-var, bsod, rm, netstat, ipconfig, tracert, nslookup, arp, route, bcdboot, bcdedit" << endl;
 	}
 	else if (ex_c == "cls") interfaceScreen();
@@ -5259,6 +5279,56 @@ void core(const string& cmd) {
 			cout << "[ ERROR ] File not found." << endl;
 		}
 	}
+	else if (ex_c == "auth") {
+		while (true) {
+			clearScreen();
+			string u_in, p_in;
+			cout << "Username: ";
+			getline(cin, u_in);
+			if (u_in.empty()) return;
+			cout << "Password: ";
+			char ch;
+			while ((ch = _getch()) != '\r') {
+				if (ch == '\b') {
+					if (!p_in.empty()) {
+						p_in.pop_back();
+						cout << "\b \b";
+					}
+				}
+				else {
+					p_in += ch;
+					cout << '*';
+				}
+			}
+			cout << endl;
+			clearScreen();
+			if (LSASS("CheckPassNoLog", nullptr, u_in, p_in) == SUCCESS_CHECK_PASSWORD) {
+				if (!NotDefined()) arslogon("logoutRequest", "", "");
+			}
+			arslogon("authorization", u_in, p_in);
+			if (SuccessAuth) break;
+		}
+		interfaceScreen();
+	}
+	else if (ex_c == "anonymous") {
+		cout << "This command is dangerous, and once it has been executed, no other commands will be available to you!" << endl;
+		cout << "Type YES to continue: ";
+		string confirm;
+		getline(cin, confirm);
+		confirm = trim(confirm);
+		if (confirm == "YES") {
+			arslogon("logoutRequest", "", "");
+			userHome = rootPath;
+			CurrentPath = rootPath;
+			SetCurrentDirectoryA(rootPath.c_str());
+			Token.sid = "";
+			Token.privilege = PRIV_NONE;
+			core("cls");
+		}
+		else {
+			cout << "Canceled." << endl;
+		}
+	}
 	else if (ex_c == "autorun") {
 		string autorunCmd;
 		cout << "Command to autorun: ";
@@ -5538,6 +5608,7 @@ void core(const string& cmd) {
 	}
 	else if (ex_c == "shutdown") {
 		arslogon("logoutRequest", "", "");
+		if (NotDefined()) fastBoot = 0;
 		arsinit("shutdown");
 	}
 	else if (ex_c == "hibernate") {
@@ -6516,36 +6587,44 @@ void BarOSkrnl(string_view Kernel_mode) {
 				}
 			}
 		}
+		else {
+			arsinit("reboot");
+		}
 		setColor("0f");
+		clearScreen();
 		string p_in;
-		for (int i = 1; i <= 12; i++) {
-			clearScreen();
-			cout << "======================================================================================================================" << endl;
-			cout << "                                                 ARSLANIUS BOOT MANAGER" << endl;
-			cout << "======================================================================================================================" << endl;
-			cout << "                                                  Resuming " << getOSName() << "..." << endl;
-			cout << endl;
-			cout << "         Build: " << currentBuild << endl;
-			cout << "         Kernel: BarOS " << VersionBarOSkrnl << endl;
-			cout << "         © Armsoup 2026" << endl;
-			cout << endl;
-			cout << "                                                     _____________" << endl;
 
-			switch (i) {
-			case 1: cout << "                                                    |          ...|" << endl; break;
-			case 2: cout << "                                                    |         ... |" << endl; break;
-			case 3: cout << "                                                    |        ...  |" << endl; break;
-			case 4: cout << "                                                    |       ...   |" << endl; break;
-			case 5: cout << "                                                    |      ...    |" << endl; break;
-			case 6: cout << "                                                    |     ...     |" << endl; break;
-			case 7: cout << "                                                    |    ...      |" << endl; break;
-			case 8: cout << "                                                    |   ...       |" << endl; break;
-			case 9: cout << "                                                    |  ...        |" << endl; break;
-			case 10: cout << "                                                    | ...         |" << endl; break;
-			case 11: cout << "                                                    |...          |" << endl; break;
-			case 12: cout << "                                                    |..           |" << endl; break;
-			}
-			cout << "                                                     -------------" << endl;
+		const string resumeFrames[] = {
+		 "|          ...|",
+		 "|         ... |",
+		 "|        ...  |",
+		 "|       ...   |",
+		 "|      ...    |",
+		 "|     ...     |",
+		 "|    ...      |",
+		 "|   ...       |",
+		 "|  ...        |",
+		 "| ...         |",
+		 "|...          |",
+		 "|..           |"
+		};
+		const int resumeFrameCount = 12;
+
+		for (int i = 0; i < resumeFrameCount; i++) {
+			string frame;
+			frame += "\x1b[H";
+			frame += "======================================================================================================================  \n";
+			frame += "                                                 ARSLANIUS BOOT MANAGER  \n";
+			frame += "======================================================================================================================  \n";
+			frame += "                                                  Resuming " + getOSName() + "...  \n\n";
+			frame += "         Build: " + currentBuild + "  \n";
+			frame += "         Kernel: BarOS " + VersionBarOSkrnl + "  \n";
+			frame += "         © Armsoup 2026  \n\n";
+			frame += "                                                     _____________  \n";
+			frame += "                                                    " + resumeFrames[i] + "  \n";
+			frame += "                                                     -------------  \n";
+
+			cout << frame << flush;
 			Sleep(230);
 		}
 		if (currentUser == "BarOS AUTHORITY\\LogonAuthorityUser") {
@@ -6632,7 +6711,7 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " Beta 3";
+	string Title = getOSName() + " RC";
 	SetConsoleTitleA(Title.c_str());
 
 	SetConsoleWidthOnly(120);
