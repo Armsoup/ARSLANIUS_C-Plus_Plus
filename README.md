@@ -86,6 +86,8 @@ No service packs
 
 • ARSLANIUS 32 RC - build 460
 
+• ARSLANIUS 32 RC2 - build 482
+
 * * *
 
 # ARSLANIUS Driver SDK
@@ -97,7 +99,7 @@ The ARSLANIUS Driver SDK allows anyone to extend the ARSLANIUS operating system 
 ### 1. Prerequisites
 
 - Microsoft Visual Studio 2022 or later (with C++ workload)
-- ARSLANIUS (build 58.2.0 (or 257) or later)
+- ARSLANIUS (build 257 or later)
 
 ### 2. Get the SDK
 
