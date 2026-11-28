@@ -29,6 +29,11 @@
   <ItemGroup>
     <ResourceCompile Include="ARSLANIUS.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <Media Include="logoff.wav" />
+    <Media Include="logon.wav" />
+    <Media Include="sound.wav" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>

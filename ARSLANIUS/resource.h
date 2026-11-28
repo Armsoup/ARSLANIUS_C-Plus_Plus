@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Включаемый файл, созданный в Microsoft Visual C++.
-// Используется ARSLANIUS 28.rc
+// Используется ARSLANIUS.rc
 //
 #define IDR_WAVE1                       101
 #define IDR_WAVE2                       102

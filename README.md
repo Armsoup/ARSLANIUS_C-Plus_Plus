@@ -10,7 +10,7 @@ Starting from the original batch version, the project evolves into a standalone 
 
 The system runs directly from any folder and automatically initializes itself on first launch.
 
-> **Starting with [version ARSLANIUS 29 RC2](https://github.com/Armsoup/ARSLANIUS_C-Plus_Plus/releases/tag/C%2B%2BOS-59.2.1), the compilation and building of .exe and .cpp files are performed in the "VisualStudio 2022 Community" environment.**
+> **Starting with version ARSLANIUS 29 RC2, the compilation and building of .exe and .cpp files are performed in the "VisualStudio 2022 Community" environment.**
 
 * * *
 
@@ -76,17 +76,9 @@ but by the time ARSLANIUS 31 Beta 2 was released, the figure had reached 257.
 
 No service packs
 
-# Aurora (Testing)
+# Aurora (Stable)
 
-• ARSLANIUS 32 Beta 1 - build 413
-
-• ARSLANIUS 32 Beta 2 - build 430
-
-• ARSLANIUS 32 Beta 3 - build 441
-
-• ARSLANIUS 32 RC - build 460
-
-• ARSLANIUS 32 RC2 - build 482
+• ARSLANIUS 32 Release - build 486
 
 * * *
 
@@ -580,7 +572,7 @@ ARSLANIUS supports full session hibernation:
 | 0x16 | CRITICAL_KERNEL_ERROR | General kernel error |
 | 0x18 | RESUME_USER_NOT_FOUND | Hibernate user deleted |
 | 0x19 | SAM_DOES_NOT_MATCH_CACHE | SAM does not match the cache |
-| DIED | CRITICAL_PROCESS_DIED | ArsLogon died |
+| DIED | CRITICAL_PROCESS_DIED | Critical Process (ArsLogon, arsinit, SMSS or LSASS) "died" |
 | 666 | MANUAL_CRASH | User typed `bsod` |
 
 * * *

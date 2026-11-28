@@ -155,7 +155,7 @@ const string OS_NAME_DEFAULT = "ARSLANIUS 32";
 const string CODENAME_DEFAULT = "Aurora";
 const string EXPECTED_SYSTEM_HASH = "57a98c0544492de7afb6aaa83cfa058c6b445e7c4c24127b13d2cfac748e1150";
 const string_view EXPECTED_ADMIN_HASH = "8f84f2200431dc8458256e74fbd76a8030e4ac684855c599ba31714b7a8adc05";
-const string_view EXPECTED_VERIFY_HASH = "6d8c55fc3479dcf90a725f2828d39a126648209b37d472b1950d388421954915";
+const string_view EXPECTED_VERIFY_HASH = "dc5beab642b6740e4b141eb72a1ae60864761e439356ee6e4fb6c3eb6e35fd7a";
 const int BOOT_TIMEOUT_DEFAULT = 30;
 const int DEFAULT_MODE_DEFAULT = 1;
 const int MAX_LOGIN_ATTEMPTS = 10;
@@ -184,8 +184,8 @@ string CurrentPath;
 string userHome;
 string osName = OS_NAME_DEFAULT;
 string currentBuild = CURRENT_BUILD;
-string codename = CODENAME_DEFAULT;
-// string codename = "";
+// string codename = CODENAME_DEFAULT;
+string codename = "";
 string REG_VERSION_FOUND = "0";
 string systemColor = "0e";
 string adminColor = "4f";
@@ -424,7 +424,7 @@ string getUptime() {
 string getOSName() {
 	string name;
 	if (!codename.empty()) {
-		name = osName + " Codename: " + codename;
+		name = osName + " " + codename;
 	}
 	else {
 		name = osName;
@@ -812,10 +812,10 @@ void executeLine(string_view line) {
 		string target = trim(args);
 		lock_guard<mutex> lock(ram_mutex);
 		if (fake_ram.find(target) == fake_ram.end()) {
-			cout << osName;
+			cout << getOSName();
 		}
 		else {
-			fake_ram[target] = { osName, chrono::steady_clock::now() };
+			fake_ram[target] = { getOSName(), chrono::steady_clock::now() };
 		}
 	}
 	else if (command == "calc") {
@@ -1396,10 +1396,11 @@ DWORD LSASS(string_view action, string* out, const string& user, string_view add
 		}
 	}
 	else if (action == "CreateToken" || action == "CreateTokenNoPass") {
+		string oldToken = GetSID();
 		Token.sid = GenerateSID(user);
 		if (Token.sid != "S-7-0-18" && Token.sid != "S-7-0-19" && Token.sid != "S-7-0-20" && Token.sid != "S-7-0-8" && Token.sid != "S-7-0-1") {
 			if (action != "CreateTokenNoPass") {
-				if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) return ERROR_ACCESS_DENIED_TOKEN;
+				if (LSASS("CheckPassNoLog", nullptr, user, additional) != SUCCESS_CHECK_PASSWORD) { Token.sid = oldToken; return ERROR_ACCESS_DENIED_TOKEN; }
 			}
 		}
 
@@ -1507,10 +1508,10 @@ DWORD WINAPI svchost(LPVOID param) {
 				if (getrand(0, 120) == 26) {
 					int rc = system("ping -n 1 google.com >nul 2>&1");
 					if (rc != 0) {
-						writeLog("BarOS SERVICE\\NETMONITOR: OFFLINE", "INFO");
+						writeLog("BarOS SERVICE\\NetMonitor: OFFLINE", "INFO");
 					}
 					else {
-						writeLog("BarOS SERVICE\\NETMONITOR: ONLINE", "INFO");
+						writeLog("BarOS SERVICE\\NetMonitor: ONLINE", "INFO");
 					}
 				}
 				Sleep(5000);
@@ -1528,7 +1529,7 @@ DWORD WINAPI svchost(LPVOID param) {
 						DWORD res = LSASS("readSAM", &recovery, "", "");
 						if (res == SUCCESS_SAM && !recovery.empty()) {
 							LSASS("writeSAM", nullptr, "", recovery);
-							cout << "[BarOS SERVICE\\TrustedInstaller] SAM has been restored with all data!" << endl;
+							writeLog("BarOS SERVICE\\TrustedInstaller: SAM has been restored with all data!", "INFO");
 						}
 						else {
 							stringstream kernel_ins;
@@ -1542,7 +1543,6 @@ DWORD WINAPI svchost(LPVOID param) {
 					}
 					if (!fileExists(regPath)) {
 						stringstream reg_ins;
-						reg_ins << "OS_NAME=" << OS_NAME_DEFAULT << endl;
 						reg_ins << "SYSTEM_COLOR=0e" << endl;
 						reg_ins << "ADMIN_COLOR=4f" << endl;
 						reg_ins << "USER_COLOR=1f" << endl;
@@ -1591,13 +1591,13 @@ DWORD WINAPI svchost(LPVOID param) {
 			}
 			else if (name == "LSASSSecurityChecker") {
 				if (g_hAntiHackThread != nullptr && WaitForSingleObject(g_hAntiHackThread, 0) == WAIT_OBJECT_0) {
-					writeLog(name + ": AntiHack thread terminated! BSOD.", "CRITICAL");
+					writeLog("BarOS SERVICE\\LSASSSecurityChecker: AntiHack thread terminated! BSOD.", "CRITICAL");
 					bsod("6");
 				}
 				if (!g_antiHackAlive) {
 					Sleep(1500);
 					if (!g_antiHackAlive) {
-						writeLog(name + ": Process memory protection is disabled! Emergency shutdown!", "CRITICAL");
+						writeLog("BarOS SERVICE\\LSASSSecurityChecker: Process memory protection is disabled! Emergency shutdown!", "CRITICAL");
 						setMyStatus(0);
 						EmShut(name);
 					}
@@ -2364,7 +2364,6 @@ void SetConsoleWidthOnly(int newWidth) {
 
 void check_registry() {
 	vector<string> linesToFind = {
-		"OS_NAME=",
 		"SYSTEM_COLOR=",
 		"ADMIN_COLOR=",
 		"USER_COLOR=",
@@ -2434,8 +2433,7 @@ void loadRegistry() {
 		if (value.empty()) continue;
 
 		try {
-			if (key == "OS_NAME") osName = value;
-			else if (key == "ENABLE_LUA") {
+			if (key == "ENABLE_LUA") {
 				if (value == "false" || value == "0") {
 					enableLua = false;
 				}
@@ -2565,7 +2563,6 @@ void Update() {
 		saveBCD();
 
 		stringstream reg_update;
-		reg_update << "OS_NAME=" << OS_NAME_DEFAULT << endl;
 		reg_update << "SYSTEM_COLOR=0e" << endl;
 		reg_update << "ADMIN_COLOR=4f" << endl;
 		reg_update << "USER_COLOR=1f" << endl;
@@ -2740,12 +2737,12 @@ void bsod(string_view code) {
 		print_slow("*** File: \\Settings And System Files\\REG.cfg", 2);
 		cout << endl;
 		print_slow("BAD_SYSTEM_CONFIG_INFO - The registry is missing required entries.", 2);
-		print_slow("OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR, ENABLE_LUA, LOCKDOWN, ADMIN_USER, SETUP or REG_VERSION", 2);
+		print_slow("SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR, ENABLE_LUA, LOCKDOWN, ADMIN_USER, SETUP or REG_VERSION", 2);
 		print_slow("is missing. Run update(7) to restore the registry.", 2);
 		cout << endl;
 		print_slow("Technical information:", 2);
 		print_slow("*** Registry file found but incomplete.", 2);
-		print_slow("*** Expected entries: OS_NAME, SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR,", 2);
+		print_slow("*** Expected entries: SYSTEM_COLOR, ADMIN_COLOR, USER_COLOR,", 2);
 		print_slow("*** ENABLE_LUA, LOCKDOWN, ADMIN_USER, SETUP REG_VERSION", 2);
 		cout << endl;
 		print_slow("If this is the first time you've seen this error, restart the system.", 2);
@@ -3137,7 +3134,6 @@ void bootMenu() {
 			cout << "[ OK ] User created." << endl;
 			pause();
 			stringstream reg;
-			reg << "OS_NAME=" << OS_NAME_DEFAULT << endl;
 			reg << "SYSTEM_COLOR=0e" << endl;
 			reg << "ADMIN_COLOR=4f" << endl;
 			reg << "USER_COLOR=1f" << endl;
@@ -3511,7 +3507,6 @@ void startupRepair() {
 
 	// Create REG.cfg
 	stringstream reg;
-	reg << "OS_NAME=" << OS_NAME_DEFAULT << endl;
 	reg << "SYSTEM_COLOR=0e" << endl;
 	reg << "ADMIN_COLOR=4f" << endl;
 	reg << "USER_COLOR=1f" << endl;
@@ -5967,12 +5962,10 @@ void core(const string& cmd) {
 			else if (input == "true" || input >= "1") {
 				DriverloadOFF = true;
 			}
-
 			else {
 				DriverloadOFF = DriverloadOFF;
 			}
 		}
-
 
 		saveBCD();
 		cout << "[ DONE ] Configuration saved." << endl;
@@ -5994,7 +5987,6 @@ void core(const string& cmd) {
 			}
 			};
 
-		sanitize(osName, OS_NAME_DEFAULT);
 		sanitize(systemColor, "0e");
 		sanitize(adminColor, "4f");
 		sanitize(userColor, "1f");
@@ -6006,12 +5998,6 @@ void core(const string& cmd) {
 		cin.ignore(cin.rdbuf()->in_avail(), '\n');
 		if (cin.peek() == '\n') cin.ignore();
 		string input;
-		cout << "Enter new OS Name (or Enter to skip): ";
-		input.clear();
-		if (getline(cin, input)) {
-			string t = trim(input);
-			if (!t.empty()) osName = t;
-		}
 		cout << "Enter new system color (or Enter to skip): ";
 		input.clear();
 		if (getline(cin, input)) {
@@ -6049,13 +6035,11 @@ void core(const string& cmd) {
 			string t = trim(input);
 			if (!t.empty()) ENABLEANON = t;
 		}
-		if (osName.empty()) osName = OS_NAME_DEFAULT;
 		if (systemColor.empty()) systemColor = "0e";
 		if (adminColor.empty()) adminColor = "4f";
 		if (userColor.empty()) userColor = "1f";
 		if (ENABLELUA.empty()) ENABLELUA = "1";
 		if (ENABLEANON.empty()) ENABLEANON = "1";
-		if (osName.length() > 50) osName = OS_NAME_DEFAULT;
 		if (systemColor.length() > 2) systemColor = "0e";
 		if (adminColor.length() > 2) adminColor = "4f";
 		if (userColor.length() > 2) userColor = "1f";
@@ -6071,7 +6055,6 @@ void core(const string& cmd) {
 		}
 
 		stringstream reg;
-		reg << "OS_NAME=" << osName << endl;
 		reg << "SYSTEM_COLOR=" << systemColor << endl;
 		reg << "ADMIN_COLOR=" << adminColor << endl;
 		reg << "USER_COLOR=" << userColor << endl;
@@ -6130,11 +6113,8 @@ void core(const string& cmd) {
 		cout << "result: " << formatDouble(result) << endl;
 	}
 	else if (ex_c == "old.calculator") {
-		if (IsGuest()) {
-			cout << "Unsafe command, use 'calc'" << endl;
-			return;
-		}
 		string calcPath = programsRoot + "\\Calc.bat";
+		if (IsGuest() || !fileExists(calcPath)) { core("calc"); return; }
 		string command = "start \"\" \"" + calcPath + "\"";
 		system(command.c_str());
 	}
@@ -6144,6 +6124,10 @@ void core(const string& cmd) {
 		getline(cin, host);
 		host = trim(host);
 		string cmd = "ping -n 4 " + host;
+		if (cmd.find("&") != string::npos || cmd.find("|") != string::npos) {
+			cout << "& and | are prohibited." << endl;
+			return;
+		}
 		system(cmd.c_str());
 	}
 	else if (ex_c == "ipconfig") {
@@ -6178,7 +6162,6 @@ void shutdownScreen() {
 	cout << "\n\n\n\n\n\n\n\n\n                                               SHUTTING DOWN\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
 	cout << "                                               " << getOSName() << endl;
 	Sleep(3000);
-	isServicesRunning = false;
 	BarOSkrnl("ACPI");
 }
 
@@ -6491,7 +6474,10 @@ void BarOSkrnl(string_view Kernel_mode) {
 				driverCommands.erase(cmd_name);
 				};
 			g_api.execute_command = [](const char* cmd) { core(string(cmd)); };
-			g_api.get_os_name = []() -> const char* { return osName.c_str(); };
+			g_api.get_os_name = []() -> const char* {
+				static string x = getOSName();
+				return x.c_str();
+				};
 			g_api.get_build = []() -> const char* { return currentBuild.c_str(); };
 			g_api.get_safe_mode = []() -> int { return safeMode; };
 			g_api.shell_execute = [](const char* cmd) -> int { return system(cmd); };
@@ -6809,8 +6795,8 @@ int main(int argc, char* argv[]) {
 	SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 	ios_base::sync_with_stdio(false);
 
-	string Title = getOSName() + " RC2";
-	SetConsoleTitleA(Title.c_str());
+	// string Title = getOSName() + " Beta 1";
+	SetConsoleTitleA(getOSName().c_str());
 
 	SetConsoleWidthOnly(120);
 
